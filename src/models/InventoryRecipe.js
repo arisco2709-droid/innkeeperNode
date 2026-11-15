@@ -20,6 +20,8 @@ const inventoryRecipeSchema = new mongoose.Schema({
   hotelId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hotel', required: true, index: true },
   propertyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Property', required: true, index: true },
   menuItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'MenuItem', required: true, index: true },
+  locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'StorageLocation', default: null, index: true },
+  location: { type: String, trim: true, default: 'Restaurant Store' },
   recipeName: { type: String, trim: true, default: '' },
   description: { type: String, trim: true, default: '' },
   servingSize: { type: String, trim: true, default: '1 serving' },

@@ -1,5 +1,7 @@
 import dayjs from 'dayjs';
-import { Room, Reservation, Invoice, Payment, HousekeepingTask, MaintenanceTicket } from '../models/index.js';
+import {
+  Room, Reservation, Invoice, Payment, HousekeepingTask, MaintenanceTicket, FoodOrder
+} from '../models/index.js';
 import { ROOM_STATUS, HOUSEKEEPING_STATUS, RESERVATION_STATUS, PAYMENT_STATUS } from '../config/constants.js';
 
 export const getDashboardSummary = async (req, res, next) => {
@@ -194,6 +196,48 @@ export const getFinancialReport = async (req, res, next) => {
       return acc;
     }, {});
 
+    const restaurantSalesByDiningType = await FoodOrder.aggregate([
+      {
+        $match: {
+          hotelId: req.hotelId,
+          status: { $ne: 'cancelled' },
+          createdAt: { $gte: start, $lte: end }
+        }
+      },
+      { $unwind: '$items' },
+      {
+        $group: {
+          _id: {
+            $cond: [
+              { $eq: [{ $ifNull: ['$items.diningType', { $ifNull: ['$diningType', 'non_ac'] }] }, 'ac'] },
+              'ac',
+              'non_ac'
+            ]
+          },
+          salesAmount: { $sum: '$items.amount' },
+          itemCount: { $sum: '$items.quantity' },
+          orderIds: { $addToSet: '$_id' }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          diningType: '$_id',
+          salesAmount: 1,
+          itemCount: 1,
+          orderCount: { $size: '$orderIds' }
+        }
+      }
+    ]);
+    const restaurantSales = {
+      ac: restaurantSalesByDiningType.find((entry) => entry.diningType === 'ac') || {
+        salesAmount: 0, itemCount: 0, orderCount: 0
+      },
+      nonAc: restaurantSalesByDiningType.find((entry) => entry.diningType === 'non_ac') || {
+        salesAmount: 0, itemCount: 0, orderCount: 0
+      }
+    };
+
     res.json({
       success: true,
       data: {
@@ -201,6 +245,7 @@ export const getFinancialReport = async (req, res, next) => {
         totalCollected,
         totalOutstanding,
         paymentByMethod,
+        restaurantSales,
         invoicesCount: invoices.length,
         paymentsCount: payments.length
       }

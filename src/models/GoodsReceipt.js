@@ -19,7 +19,9 @@ const goodsReceiptLineSchema = new mongoose.Schema({
   baseUnitSymbolSnapshot: { type: String, trim: true, default: '' },
   batchNumber: { type: String, trim: true, default: '' },
   expiryDate: { type: Date, default: null },
-  unitCost: { type: Number, required: true, min: 0 }
+  unitCost: { type: Number, required: true, min: 0 },
+  purchaseTaxAmount: { type: Number, min: 0, default: 0 },
+  taxInclusiveUnitCost: { type: Number, min: 0, default: null }
 }, { _id: false });
 
 const goodsReceiptSchema = new mongoose.Schema({
@@ -31,7 +33,9 @@ const goodsReceiptSchema = new mongoose.Schema({
   invoiceNumber: { type: String, trim: true, default: '' },
   invoiceAttachment: { type: String, default: '' },
   location: { type: String, trim: true, default: 'Main Store' },
+  locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'StorageLocation', default: null, index: true },
   lines: { type: [goodsReceiptLineSchema], required: true },
+  purchaseTaxAmount: { type: Number, min: 0, default: 0 },
   receivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   receivedAt: { type: Date, default: Date.now },
   notes: { type: String, trim: true, default: '' }

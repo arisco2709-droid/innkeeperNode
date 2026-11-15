@@ -29,6 +29,12 @@ const restaurantTableSchema = new mongoose.Schema({
     min: 1,
     default: 4
   },
+  diningType: {
+    type: String,
+    enum: ['ac', 'non_ac'],
+    default: 'non_ac',
+    index: true
+  },
   status: {
     type: String,
     enum: ['available', 'reserved'],

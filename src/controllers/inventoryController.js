@@ -9,6 +9,7 @@ import { notifyHotelOperations, notifyRoles } from '../services/notificationServ
 import {
   evaluateAutomaticReorder, postStockMovement, runInventoryTransaction
 } from '../services/inventoryService.js';
+import { resolveStorageLocation } from '../services/storageLocationService.js';
 import {
   getItemUnitConfiguration, getUnitConversionFactor, normalizeInventoryUnit
 } from '../config/inventoryUnits.js';
@@ -223,10 +224,14 @@ export const getInventoryBatches = async (req, res, next) => {
     if (!item) {
       return res.status(404).json({ success: false, message: 'Inventory item not found.' });
     }
+    if (req.query.locationId && !mongoose.isValidObjectId(req.query.locationId)) {
+      return res.status(400).json({ success: false, message: 'Choose a valid storage location.' });
+    }
     const batches = await InventoryBatch.find({
       hotelId: req.hotelId,
       propertyId: req.propertyId,
       itemId: item._id,
+      ...(req.query.locationId ? { locationId: req.query.locationId } : {}),
       ...(req.query.location ? { location: String(req.query.location).trim() } : {})
     })
       .populate('vendorId', 'name')
@@ -460,7 +465,12 @@ export const createStockReceiptRequest = async (req, res, next) => {
       ? Number(existingStockDeduction)
       : Number(existingStockDeductionQuantity);
     const enteredWastageQuantity = Number(wastageQuantity);
-    const location = String(req.body.location || 'Main Store').trim();
+    const storageLocation = await resolveStorageLocation({
+      hotelId: req.hotelId,
+      locationId: req.body.locationId,
+      locationName: req.body.location || 'Main Store'
+    });
+    const location = storageLocation.locationName;
     if (!mongoose.isValidObjectId(itemId) || !unit?.trim() || !location
       || !Number.isFinite(requestedQuantity) || requestedQuantity <= 0
       || !Number.isFinite(unitPrice) || unitPrice < 0
@@ -526,7 +536,7 @@ export const createStockReceiptRequest = async (req, res, next) => {
       hotelId: req.hotelId,
       propertyId: req.propertyId,
       itemId: item._id,
-      location,
+      $or: [{ locationId: storageLocation._id }, { locationId: null, location }],
       remainingQuantity: { $gt: 0 }
     }).sort({ receivedAt: 1, _id: 1 }).lean();
     const previousAvailableQuantity = previousBatches.reduce(
@@ -561,6 +571,7 @@ export const createStockReceiptRequest = async (req, res, next) => {
       vendorId,
       department: String(req.body.department || '').trim(),
       location,
+      locationId: storageLocation._id,
       expiryDate,
       notes: String(req.body.notes || '').trim(),
       previousBatches: previousBatches.map((batch) => ({
@@ -632,6 +643,20 @@ export const reviewStockReceiptRequest = async (req, res, next) => {
       if (!receiptRequest) {
         throw Object.assign(new Error('Pending stock receipt approval not found.'), { statusCode: 404 });
       }
+      const requestLocation = await resolveStorageLocation({
+        hotelId: req.hotelId,
+        locationId: receiptRequest.locationId,
+        locationName: receiptRequest.location || 'Main Store',
+        session
+      });
+      receiptRequest.location = requestLocation.locationName;
+      receiptRequest.locationId = requestLocation._id;
+      const locationMatch = {
+        $or: [
+          { locationId: requestLocation._id },
+          { locationId: null, location: requestLocation.locationName }
+        ]
+      };
       receiptRequest.status = decision === 'approve' ? 'approved' : 'rejected';
       receiptRequest.reviewedBy = req.user._id;
       receiptRequest.reviewedAt = new Date();
@@ -644,7 +669,7 @@ export const reviewStockReceiptRequest = async (req, res, next) => {
             hotelId: req.hotelId,
             propertyId: req.propertyId,
             itemId: receiptRequest.itemId,
-            location: receiptRequest.location,
+            ...locationMatch,
             remainingQuantity: { $gt: 0 }
           }).session(session);
           const eligibleQuantity = eligibleBatches.reduce(
@@ -672,6 +697,7 @@ export const reviewStockReceiptRequest = async (req, res, next) => {
             unit: item.baseUnit || item.unit,
             batchIds: previousBatchIds,
             location: receiptRequest.location,
+            locationId: receiptRequest.locationId,
             department: receiptRequest.department,
             notes: `Existing stock deduction approved for restock request ${receiptRequest._id}.`,
             referenceNumber: `RESTOCK-USE-${receiptRequest._id}`,
@@ -686,7 +712,7 @@ export const reviewStockReceiptRequest = async (req, res, next) => {
           hotelId: req.hotelId,
           propertyId: req.propertyId,
           itemId: receiptRequest.itemId,
-          location: receiptRequest.location
+          ...locationMatch
         }).session(session);
         receiptRequest.remainingPreviousStockAfterDeduction = remainingPreviousBatches.reduce(
           (total, batch) => total + batch.remainingQuantity, 0
@@ -702,6 +728,7 @@ export const reviewStockReceiptRequest = async (req, res, next) => {
           vendorId: receiptRequest.vendorId,
           autoGenerateBatchNumber: true,
           location: receiptRequest.location,
+          locationId: receiptRequest.locationId,
           department: receiptRequest.department,
           notes: receiptRequest.notes,
           referenceNumber: `RESTOCK-${receiptRequest._id}`,
@@ -731,7 +758,7 @@ export const reviewStockReceiptRequest = async (req, res, next) => {
             hotelId: req.hotelId,
             propertyId: req.propertyId,
             itemId: receiptRequest.itemId,
-            location: receiptRequest.location,
+            ...locationMatch,
             batchNumber: movementResult.movement.batchNumber
           }).sort({ receivedAt: -1, _id: -1 }).session(session);
           if (!freshBatch) {
@@ -745,9 +772,11 @@ export const reviewStockReceiptRequest = async (req, res, next) => {
             hotelId: req.hotelId,
             propertyId: req.propertyId,
             itemId: receiptRequest.itemId,
-            location: receiptRequest.location,
             remainingQuantity: { $gt: 0 },
-            $or: [{ expiryDate: null }, { expiryDate: { $gt: new Date() } }]
+            $and: [
+              locationMatch,
+              { $or: [{ expiryDate: null }, { expiryDate: { $gt: new Date() } }] }
+            ]
           }).session(session);
           const usableWastageQuantity = availableForWastage.reduce(
             (total, batch) => total + batch.remainingQuantity, 0
@@ -781,6 +810,7 @@ export const reviewStockReceiptRequest = async (req, res, next) => {
             batchIds: wastageBatchIds,
             batchNumber: affectedBatchNumbers[0] || '',
             location: receiptRequest.location,
+            locationId: receiptRequest.locationId,
             department: receiptRequest.department,
             notes: `Wastage during stock receipt: ${receiptRequest.wastageReason}. Affected batches: ${affectedBatchNumbers.join(', ')}.`,
             referenceNumber: `RESTOCK-WASTE-${receiptRequest._id}`,
@@ -831,6 +861,7 @@ export const updateInventoryItem = async (req, res, next) => {
       'name', 'code', 'category', 'description', 'unit', 'unitCost', 'sellingPrice',
       'minStockThreshold', 'maxStockLevel', 'reorderQuantity', 'vendorId', 'barcode',
       'trackExpiry', 'trackBatchNumber', 'unitConversions', 'isActive', 'location',
+      'locationId',
       'stockVerificationIntervalDays',
       'baseUnit', 'purchaseUnit', 'purchaseConversionFactor', 'purchasePrice', 'packagingOptions'
     ];
@@ -848,6 +879,15 @@ export const updateInventoryItem = async (req, res, next) => {
       _id: req.params.id, hotelId: req.hotelId, propertyId: req.propertyId
     });
     if (!currentItem) return res.status(404).json({ success: false, message: 'Inventory item not found.' });
+    if (updates.locationId !== undefined || updates.location !== undefined) {
+      const location = await resolveStorageLocation({
+        hotelId: req.hotelId,
+        locationId: updates.locationId ?? currentItem.locationId,
+        locationName: updates.location ?? currentItem.location ?? 'Main Store'
+      });
+      updates.location = location.locationName;
+      updates.locationId = location._id;
+    }
     if (updates.unit !== undefined && updates.baseUnit === undefined) updates.baseUnit = updates.unit;
     if (updates.baseUnit !== undefined && updates.unit === undefined) updates.unit = updates.baseUnit;
     if (updates.baseUnit !== undefined
@@ -976,8 +1016,16 @@ export const createInventoryItem = async (req, res, next) => {
     }
 
     const item = await runInventoryTransaction(async (session) => {
+      const storageLocation = await resolveStorageLocation({
+        hotelId: req.hotelId,
+        locationId: details.locationId,
+        locationName: details.location || 'Main Store',
+        session
+      });
       const [created] = await InventoryItem.create([{
         ...details,
+        location: storageLocation.locationName,
+        locationId: storageLocation._id,
         ...unitConfiguration,
         name: name.trim(),
         code: code.trim().toUpperCase(),
@@ -998,7 +1046,8 @@ export const createInventoryItem = async (req, res, next) => {
           movementType: 'opening',
           quantity: openingStock,
           unit: openingUnit || unitConfiguration.baseUnit,
-          location: details.location || 'Main Store',
+          location: storageLocation.locationName,
+          locationId: storageLocation._id,
           batchNumber: openingBatchNumber,
           expiryDate: openingExpiryDate ? new Date(openingExpiryDate) : null,
           referenceNumber: generateReference('OPEN'),
@@ -1033,9 +1082,14 @@ export const createInventoryItem = async (req, res, next) => {
 export const recordStockMovement = async (req, res, next) => {
   try {
     const {
-      itemId, movementType, quantity, notes, referenceNumber, location, department, idempotencyKey
+      itemId, movementType, quantity, notes, referenceNumber, location, locationId, department, idempotencyKey
     } = req.body;
-    const receiptLocation = String(location || 'Main Store').trim() || 'Main Store';
+    const storageLocation = await resolveStorageLocation({
+      hotelId: req.hotelId,
+      locationId,
+      locationName: location || 'Main Store'
+    });
+    const receiptLocation = storageLocation.locationName;
     const transactionReferenceNumber = referenceNumber || generateReference('MOV');
     const autoGenerateBatchNumber = req.body.autoGenerateBatchNumber === true;
     const hasWastageQuantity = req.body.wastageQuantity !== undefined;
@@ -1150,7 +1204,7 @@ export const recordStockMovement = async (req, res, next) => {
           hotelId: req.hotelId,
           propertyId: req.propertyId,
           itemId,
-          location: receiptLocation,
+          $or: [{ locationId: storageLocation._id }, { locationId: null, location: receiptLocation }],
           remainingQuantity: { $gt: 0 }
         }).sort({ receivedAt: 1, _id: 1 }).session(session);
         const previousAvailableQuantity = previousBatches.reduce(
@@ -1190,6 +1244,7 @@ export const recordStockMovement = async (req, res, next) => {
             referenceNumber: `${transactionReferenceNumber}-USE`,
             recordedBy: req.user._id,
             idempotencyKey: movementIdempotencyKey ? `${movementIdempotencyKey}:existing-stock-deduction` : undefined,
+            locationId: storageLocation._id,
             session
           });
           deductionMovement = deductionResult.movement;
@@ -1204,6 +1259,7 @@ export const recordStockMovement = async (req, res, next) => {
         unit: req.body.unit,
         unitCost: req.body.unitCost,
         purchaseUnitPrice: req.body.purchaseUnitPrice,
+        purchaseTaxAmount: req.body.purchaseTaxAmount,
         vendorId,
         autoGenerateBatchNumber,
         purchasePackageId: req.body.purchasePackageId || null,
@@ -1212,6 +1268,7 @@ export const recordStockMovement = async (req, res, next) => {
         notes: notes || '',
         referenceNumber: transactionReferenceNumber,
         location: movementType === 'receipt' ? receiptLocation : location || 'Main Store',
+        locationId: storageLocation._id,
         department: department || '',
         batchNumber: req.body.batchNumber || '',
         expiryDate: req.body.expiryDate ? new Date(req.body.expiryDate) : null,
@@ -1219,7 +1276,10 @@ export const recordStockMovement = async (req, res, next) => {
           purchaseQuantity: Number(quantity),
           purchaseUnit: req.body.unit || '',
           purchaseUnitCost: Number(req.body.purchaseUnitPrice),
-          purchaseAmount: Number(quantity) * Number(req.body.purchaseUnitPrice)
+          purchaseAmount: Number(quantity) * Number(req.body.purchaseUnitPrice),
+          purchaseTaxAmount: Number(req.body.purchaseTaxAmount || 0),
+          purchaseTaxInclusiveUnitCost: Number(req.body.purchaseUnitPrice)
+            + (Number(req.body.purchaseTaxAmount || 0) / Number(quantity))
         } : {},
         recordedBy: req.user._id,
         idempotencyKey: movementIdempotencyKey,
@@ -1233,7 +1293,7 @@ export const recordStockMovement = async (req, res, next) => {
         hotelId: req.hotelId,
         propertyId: req.propertyId,
         itemId,
-        location: receiptLocation,
+        $or: [{ locationId: storageLocation._id }, { locationId: null, location: receiptLocation }],
         batchNumber: receiptResult.movement.batchNumber
       }).sort({ receivedAt: -1, _id: -1 }).session(session);
       if (!freshBatch) {
@@ -1750,6 +1810,14 @@ export const receivePurchaseOrder = async (req, res, next) => {
       if (!currentPO || ['cancelled', 'received'].includes(currentPO.status)) {
         throw Object.assign(new Error('Purchase order is not open for receiving.'), { statusCode: 409 });
       }
+      const receiptLocation = await resolveStorageLocation({
+        hotelId: req.hotelId,
+        locationId: req.body.locationId,
+        locationName: req.body.location || 'Main Store',
+        session
+      });
+      const purchaseSubtotal = currentPO.subtotal
+        || currentPO.items.reduce((sum, line) => sum + line.totalAmount, 0);
       const lines = [];
       for (const poLine of currentPO.items) {
         const input = (req.body.items || []).find((line) => String(line.itemId) === String(poLine.itemId));
@@ -1765,6 +1833,13 @@ export const receivePurchaseOrder = async (req, res, next) => {
           throw Object.assign(new Error(`Invalid received quantities for ${poLine.itemName}.`), { statusCode: 400 });
         }
         if (receivedQuantity === 0) continue;
+        const acceptedSubtotal = acceptedQuantity * Number(poLine.unitCost || 0);
+        const purchaseTaxAmount = purchaseSubtotal > 0
+          ? Math.round(Number(currentPO.taxAmount || 0) * (acceptedSubtotal / purchaseSubtotal) * 100) / 100
+          : 0;
+        const taxInclusiveUnitCost = acceptedSubtotal > 0
+          ? Number(poLine.unitCost || 0) + (purchaseTaxAmount / acceptedQuantity)
+          : Number(poLine.unitCost || 0);
         const batchNumber = String(input?.batchNumber || '').trim();
         const expiryDate = input?.expiryDate ? new Date(input.expiryDate) : null;
         if (expiryDate && Number.isNaN(expiryDate.getTime())) {
@@ -1790,7 +1865,9 @@ export const receivePurchaseOrder = async (req, res, next) => {
           rejectedQuantity,
           batchNumber,
           expiryDate,
-          unitCost: poLine.unitCost
+          unitCost: poLine.unitCost,
+          purchaseTaxAmount,
+          taxInclusiveUnitCost
         });
         if (acceptedQuantity > 0) {
           await postStockMovement({
@@ -1805,8 +1882,9 @@ export const receivePurchaseOrder = async (req, res, next) => {
             purchasePackageId: poLine.purchasePackageId || null,
             purchasePackageName: poLine.packageNameSnapshot || '',
             purchasePackageSnapshot: Boolean(poLine.purchasePackageId),
-            unitCost: poLine.unitCost / (poLine.conversionFactor || 1),
-            location: req.body.location || 'Main Store',
+            unitCost: taxInclusiveUnitCost / (poLine.conversionFactor || 1),
+            location: receiptLocation.locationName,
+            locationId: receiptLocation._id,
             referenceNumber: currentPO.poNumber,
             notes: `Goods receipt for purchase order ${currentPO.poNumber}`,
             recordedBy: req.user._id,
@@ -1820,6 +1898,8 @@ export const receivePurchaseOrder = async (req, res, next) => {
               purchaseUnit: poLine.unit || '',
               purchaseUnitCost: poLine.unitCost,
               purchaseAmount: Math.round(acceptedQuantity * poLine.unitCost * 100) / 100,
+              purchaseTaxAmount,
+              purchaseTaxInclusiveUnitCost: taxInclusiveUnitCost,
               vendorId: currentPO.vendorId,
               purchaseOrderId: currentPO._id,
               invoiceNumber: String(req.body.invoiceNumber || '').trim()
@@ -1837,8 +1917,10 @@ export const receivePurchaseOrder = async (req, res, next) => {
         requestKey: key || undefined,
         invoiceNumber: req.body.invoiceNumber || '',
         invoiceAttachment: req.body.invoiceAttachment || '',
-        location: req.body.location || 'Main Store',
+        location: receiptLocation.locationName,
+        locationId: receiptLocation._id,
         lines,
+        purchaseTaxAmount: lines.reduce((sum, line) => sum + Number(line.purchaseTaxAmount || 0), 0),
         receivedBy: req.user._id,
         receivedAt: purchaseDate,
         notes: req.body.notes || ''
@@ -1847,8 +1929,6 @@ export const receivePurchaseOrder = async (req, res, next) => {
         (sum, line) => sum + line.acceptedQuantity * line.unitCost,
         0
       );
-      const purchaseSubtotal = currentPO.subtotal
-        || currentPO.items.reduce((sum, line) => sum + line.totalAmount, 0);
       const taxAndDiscount = currentPO.taxAmount - currentPO.discountAmount;
       const payableAmount = purchaseSubtotal > 0
         ? receivedSubtotal + taxAndDiscount * (receivedSubtotal / purchaseSubtotal)

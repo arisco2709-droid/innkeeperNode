@@ -5,6 +5,7 @@ import {
 } from '../models/index.js';
 import { convertQuantityToBase, normalizeInventoryUnit } from '../config/inventoryUnits.js';
 import { generateReference } from '../utils/reference.js';
+import { resolveStorageLocation } from './storageLocationService.js';
 
 const round = (value) => Math.round((value + Number.EPSILON) * 10000) / 10000;
 const roundQuantity = (value) => Math.round((value + Number.EPSILON) * 100000000) / 100000000;
@@ -63,6 +64,7 @@ const recordPreparedFoodMovement = async ({
     sale: 'soldQuantity',
     wastage: 'wastedQuantity',
     complimentary: 'complimentaryQuantity',
+    unrecorded_consumption: 'unrecordedQuantity',
     staff_consumption: 'staffConsumptionQuantity',
     transfer_out: 'transferredOutQuantity'
   }[movementType];
@@ -100,6 +102,7 @@ const recordPreparedFoodMovement = async ({
     idempotencyKey,
     reason,
     location: batch.location,
+    locationId: batch.locationId,
     recordedBy,
     notes
   }], { session });
@@ -116,7 +119,9 @@ export const createProductionBatch = async ({
   ingredients = [],
   wastage = [],
   location = 'Kitchen Store',
+  locationId,
   rawMaterialLocation = 'Main Store',
+  rawMaterialLocationId,
   productionDate = new Date(),
   expiryDate = null,
   preparedBy = null,
@@ -152,6 +157,10 @@ export const createProductionBatch = async ({
     hotelId
   }).session(session);
   if (!menuItem) throw Object.assign(new Error('The recipe menu item no longer exists.'), { statusCode: 409 });
+  const [productionStorageLocation, rawStorageLocation] = await Promise.all([
+    resolveStorageLocation({ hotelId, locationId, locationName: location, session }),
+    resolveStorageLocation({ hotelId, locationId: rawMaterialLocationId, locationName: rawMaterialLocation, session })
+  ]);
 
   const productionAt = productionDate instanceof Date ? productionDate : new Date(productionDate);
   const expiryAt = expiryDate ? new Date(expiryDate) : null;
@@ -246,7 +255,8 @@ export const createProductionBatch = async ({
       movementType: 'issue',
       quantity: enteredQuantity,
       unit,
-      location: String(rawMaterialLocation).trim() || 'Main Store',
+      location: rawStorageLocation.locationName,
+      locationId: rawStorageLocation._id,
       department: 'Production',
       referenceNumber: batchNumber,
       notes: `Raw material consumed for ${recipe.recipeName || menuItem.name} production.`,
@@ -265,7 +275,8 @@ export const createProductionBatch = async ({
         movementType: 'wastage',
         quantity: wastageEntered,
         unit: wastageUnit,
-        location: String(rawMaterialLocation).trim() || 'Main Store',
+        location: rawStorageLocation.locationName,
+        locationId: rawStorageLocation._id,
         department: 'Production',
         referenceNumber: `${batchNumber}-WASTE`,
         notes: `Production raw material wastage: ${wastageReason}`,
@@ -327,7 +338,10 @@ export const createProductionBatch = async ({
     rawMaterialWastageCost: roundMoney(rawMaterialWastageCost),
     costPerPortion,
     sellingPrice: Number(menuItem.price) || 0,
-    location: String(location).trim() || 'Kitchen Store',
+    location: productionStorageLocation.locationName,
+    locationId: productionStorageLocation._id,
+    rawMaterialLocation: rawStorageLocation.locationName,
+    rawMaterialLocationId: rawStorageLocation._id,
     productionDate: productionAt,
     receivedAt: now,
     expiryDate: expiryAt,
@@ -346,6 +360,7 @@ export const createProductionBatch = async ({
     totalCost: roundMoney(accepted * costPerPortion),
     idempotencyKey: idempotencyKey ? `production:${idempotencyKey}:receipt` : undefined,
     location: batch.location,
+    locationId: batch.locationId,
     recordedBy: recordedBy || null
   }], { session });
   return { batch, duplicate: false };
@@ -355,11 +370,11 @@ export const recordPreparedFoodUse = async ({
   hotelId, propertyId, productionBatchId, movementType, quantity, reason = '', notes = '', recordedBy,
   idempotencyKey
 }, session) => {
-  if (!['wastage', 'complimentary', 'staff_consumption', 'transfer_out'].includes(movementType)) {
+  if (!['wastage', 'complimentary', 'unrecorded_consumption', 'staff_consumption', 'transfer_out'].includes(movementType)) {
     throw Object.assign(new Error('Unsupported prepared food use type.'), { statusCode: 400 });
   }
-  if (movementType === 'wastage' && !String(reason).trim()) {
-    throw Object.assign(new Error('A reason is required when recording prepared food wastage.'), { statusCode: 400 });
+  if (['wastage', 'unrecorded_consumption'].includes(movementType) && !String(reason).trim()) {
+    throw Object.assign(new Error(`A reason is required when recording prepared food ${movementType === 'wastage' ? 'wastage' : 'unrecorded use'}.`), { statusCode: 400 });
   }
   if (idempotencyKey) {
     const existing = await PreparedFoodMovement.findOne({
@@ -387,7 +402,8 @@ export const recordPreparedFoodUse = async ({
 };
 
 export const transferPreparedFood = async ({
-  hotelId, propertyId, productionBatchId, quantity, destinationLocation, recordedBy, idempotencyKey, notes = ''
+  hotelId, propertyId, productionBatchId, quantity, destinationLocation, destinationLocationId,
+  recordedBy, idempotencyKey, notes = ''
 }, session) => {
   const existingMovement = await PreparedFoodMovement.findOne({
     hotelId,
@@ -413,7 +429,13 @@ export const transferPreparedFood = async ({
     return { sourceBatch, targetBatch, duplicate: true };
   }
   const transferQuantity = roundQuantity(Number(quantity));
-  const destination = String(destinationLocation || '').trim();
+  const destinationStorageLocation = await resolveStorageLocation({
+    hotelId,
+    locationId: destinationLocationId,
+    locationName: destinationLocation,
+    session
+  });
+  const destination = destinationStorageLocation.locationName;
   if (!Number.isFinite(transferQuantity) || transferQuantity <= 0 || !destination) {
     throw Object.assign(new Error('Enter a positive transfer quantity and destination location.'), { statusCode: 400 });
   }
@@ -424,7 +446,8 @@ export const transferPreparedFood = async ({
     status: 'active'
   }).session(session);
   if (!sourceBatch) throw Object.assign(new Error('Active production batch not found.'), { statusCode: 404 });
-  if (sourceBatch.location === destination) {
+  if ((sourceBatch.locationId && String(sourceBatch.locationId) === String(destinationStorageLocation._id))
+    || (!sourceBatch.locationId && sourceBatch.location === destination)) {
     throw Object.assign(new Error('Choose a destination different from the current batch location.'), { statusCode: 400 });
   }
   const movedSource = await ProductionBatch.findOneAndUpdate({
@@ -458,6 +481,7 @@ export const transferPreparedFood = async ({
     costPerPortion: sourceBatch.costPerPortion,
     sellingPrice: sourceBatch.sellingPrice,
     location: destination,
+    locationId: destinationStorageLocation._id,
     productionDate: sourceBatch.productionDate,
     receivedAt,
     expiryDate: sourceBatch.expiryDate,
@@ -482,7 +506,9 @@ export const transferPreparedFood = async ({
       idempotencyKey,
       reason: notes,
       location: sourceBatch.location,
+      locationId: sourceBatch.locationId,
       destinationLocation: destination,
+      destinationLocationId: destinationStorageLocation._id,
       recordedBy
     },
     {
@@ -497,7 +523,9 @@ export const transferPreparedFood = async ({
       idempotencyKey: `${idempotencyKey}:in`,
       reason: notes,
       location: destination,
+      locationId: destinationStorageLocation._id,
       destinationLocation: sourceBatch.location,
+      destinationLocationId: sourceBatch.locationId,
       recordedBy
     }
   ], { session, ordered: true });
@@ -518,6 +546,7 @@ const reverseProductionStockMovement = async (movement, batch, recordedBy, sessi
     propertyId: batch.propertyId,
     item,
     location: movement.location,
+    locationId: movement.locationId,
     delta: movement.quantity,
     session
   });
@@ -969,8 +998,13 @@ const unitIdForSymbol = (item, symbol) => {
     .find((option) => String(option.unitId?.symbol || '') === symbol)?.unitId || null;
 };
 
-const updateBalance = async ({ hotelId, propertyId, item, location, delta, session }) => {
-  let balance = await InventoryBalance.findOne({
+const updateBalance = async ({ hotelId, propertyId, item, location, locationId, delta, session }) => {
+  let balance = locationId
+    ? await InventoryBalance.findOne({
+      hotelId, propertyId, itemId: item._id, locationId
+    }).session(session)
+    : null;
+  balance ||= await InventoryBalance.findOne({
     hotelId, propertyId, itemId: item._id, location
   }).session(session);
 
@@ -980,8 +1014,12 @@ const updateBalance = async ({ hotelId, propertyId, item, location, delta, sessi
       propertyId,
       itemId: item._id,
       location,
+      locationId,
       quantity: location === 'Main Store' ? item.currentStock : 0
     }], { session }).then(([created]) => created);
+  } else if (locationId && !balance.locationId) {
+    balance.locationId = locationId;
+    await balance.save({ session });
   }
 
   const updated = await InventoryBalance.findOneAndUpdate({
@@ -1011,9 +1049,11 @@ export const postStockMovement = async ({
   looseQuantity = 0,
   unitCost: unitCostOverride,
   purchaseUnitPrice = null,
+  purchaseTaxAmount: purchaseTaxAmountOverride = 0,
   vendorId = null,
   autoGenerateBatchNumber = false,
   location = 'Main Store',
+  locationId,
   department = '',
   referenceNumber = '',
   notes = '',
@@ -1038,6 +1078,14 @@ export const postStockMovement = async ({
 
   const item = await InventoryItem.findOne({ _id: itemId, hotelId, propertyId, isActive: true }).session(session);
   if (!item) throw Object.assign(new Error('Active inventory item not found.'), { statusCode: 404 });
+  const storageLocation = await resolveStorageLocation({
+    hotelId,
+    locationId,
+    locationName: location,
+    session
+  });
+  location = storageLocation.locationName;
+  locationId = storageLocation._id;
   const hasPackageQuantity = packageQuantity !== null && packageQuantity !== undefined;
   if ((purchasePackageId && !hasPackageQuantity && !purchasePackageSnapshot)
     || (hasPackageQuantity && !purchasePackageId)) {
@@ -1104,6 +1152,11 @@ export const postStockMovement = async ({
   if (purchasePrice !== null && (!Number.isFinite(purchasePrice) || purchasePrice < 0)) {
     throw Object.assign(new Error('Purchase price must be a non-negative number.'), { statusCode: 400 });
   }
+  const purchaseTaxAmount = Number(purchaseTaxAmountOverride);
+  if (!Number.isFinite(purchaseTaxAmount) || purchaseTaxAmount < 0
+    || (purchaseTaxAmount > 0 && (purchasePrice === null || movementType !== 'receipt'))) {
+    throw Object.assign(new Error('Purchase tax must be a non-negative amount on a stock receipt with a purchase price.'), { statusCode: 400 });
+  }
   if (autoGenerateBatchNumber && movementType === 'receipt' && !batchNumber) {
     const hotel = await Hotel.findById(hotelId).select('name').session(session);
     if (!hotel?.name) {
@@ -1130,7 +1183,12 @@ export const postStockMovement = async ({
   const enteredUnitId = enteredUnitRecord?._id || configuredUnitId || null;
   const baseQuantity = roundQuantity(converted.quantity);
   const locationBalance = isStockCount
-    ? await InventoryBalance.findOne({ hotelId, propertyId, itemId: item._id, location }).session(session)
+    ? await InventoryBalance.findOne({
+      hotelId,
+      propertyId,
+      itemId: item._id,
+      $or: [{ locationId }, { locationId: null, location }]
+    }).session(session)
     : null;
   const currentLocationStock = locationBalance?.quantity ?? (location === 'Main Store' ? item.currentStock : 0);
   const delta = ['receipt', 'return', 'opening'].includes(movementType) ? baseQuantity
@@ -1138,7 +1196,7 @@ export const postStockMovement = async ({
       ? baseQuantity - currentLocationStock
       : -baseQuantity;
   const receiptUnitCost = purchasePrice !== null
-    ? purchasePrice / converted.factor
+    ? (purchasePrice / converted.factor) + (baseQuantity > 0 ? purchaseTaxAmount / baseQuantity : 0)
     : Number.isFinite(Number(unitCostOverride)) ? Number(unitCostOverride) : item.unitCost;
   if (delta > 0 && item.trackExpiry && !expiryDate) {
     throw Object.assign(new Error(`An expiry date is required for ${item.name}.`), { statusCode: 400 });
@@ -1150,7 +1208,13 @@ export const postStockMovement = async ({
   let batchesToDeduct = [];
   let batchAllocations = [];
   const hasExpiryBatches = delta < 0 && await InventoryBatch.exists({
-    hotelId, propertyId, itemId: item._id, location, expiryDate: { $ne: null }
+    hotelId,
+    propertyId,
+    itemId: item._id,
+    $and: [
+      { $or: [{ locationId }, { locationId: null, location }] },
+      { expiryDate: { $ne: null } }
+    ]
   }).session(session);
   if (delta < 0) {
     const now = new Date();
@@ -1158,12 +1222,12 @@ export const postStockMovement = async ({
       hotelId,
       propertyId,
       itemId: item._id,
-      location,
+      $or: [{ locationId }, { locationId: null, location }],
       remainingQuantity: { $gt: 0 },
       ...(Array.isArray(batchIds) ? { _id: { $in: batchIds } } : {}),
-      ...(movementType === 'expiry'
+      $and: [movementType === 'expiry'
         ? { expiryDate: { $lte: now } }
-        : { $or: [{ expiryDate: null }, { expiryDate: { $gt: now } }] })
+        : { $or: [{ expiryDate: null }, { expiryDate: { $gt: now } }] }]
     };
     batchesToDeduct = await InventoryBatch.find(batchFilter)
       .sort({ receivedAt: 1, _id: 1 })
@@ -1206,7 +1270,7 @@ export const postStockMovement = async ({
   }
 
   const balanceMovement = await updateBalance({
-    hotelId, propertyId, item, location, delta, session
+    hotelId, propertyId, item, location, locationId, delta, session
   });
   let remainingToDeduct = Math.abs(delta);
   let movementTotalValue = 0;
@@ -1248,6 +1312,7 @@ export const postStockMovement = async ({
       propertyId,
       itemId: item._id,
       location,
+      locationId,
       batchNumber,
       quantity: delta,
       remainingQuantity: delta,
@@ -1258,7 +1323,9 @@ export const postStockMovement = async ({
         purchaseQuantity: enteredQuantity,
         purchaseUnit: enteredUnit,
         purchaseUnitCost: purchasePrice,
-        purchaseAmount: round(enteredQuantity * purchasePrice)
+        purchaseAmount: round(enteredQuantity * purchasePrice),
+        purchaseTaxAmount: round(purchaseTaxAmount),
+        purchaseTaxInclusiveUnitCost: receiptUnitCost * converted.factor
       } : {}),
       ...batchDetails,
       ...(receivedAt ? { receivedAt } : {})
@@ -1284,6 +1351,7 @@ export const postStockMovement = async ({
     notes,
     recordedBy,
     location,
+    locationId,
     department,
     vendorId,
     purchaseUnitPrice: purchasePrice,
@@ -1331,7 +1399,8 @@ export const runInventoryTransaction = async (operation) => {
 };
 
 export const transferStock = async ({
-  hotelId, propertyId, itemId, quantity, unit, conversionFactor, fromLocation, toLocation, department = '',
+  hotelId, propertyId, itemId, quantity, unit, conversionFactor, fromLocation, toLocation,
+  fromLocationId, toLocationId, department = '',
   transferMode = 'location', fromDepartment = '', toDepartment = '',
   recordedBy, referenceNumber, idempotencyKey, notes = '', session
 }) => {
@@ -1355,9 +1424,30 @@ export const transferStock = async ({
   }
   const enteredQuantity = Number(quantity);
   if (!Number.isFinite(enteredQuantity) || enteredQuantity <= 0
-    || !sourceLocation || !destinationLocation || sourceLocation === destinationLocation) {
+    || (!sourceLocation && !fromLocationId) || (!destinationLocation && !toLocationId)) {
     throw Object.assign(new Error('Transfer requires a positive quantity and two different stock locations.'), { statusCode: 400 });
   }
+  const [sourceStorageLocation, destinationStorageLocation] = await Promise.all([
+    resolveStorageLocation({
+      hotelId,
+      locationId: fromLocationId,
+      locationName: sourceLocation,
+      session
+    }),
+    resolveStorageLocation({
+      hotelId,
+      locationId: toLocationId,
+      locationName: destinationLocation,
+      session
+    })
+  ]);
+  if (String(sourceStorageLocation._id) === String(destinationStorageLocation._id)) {
+    throw Object.assign(new Error('Choose a destination different from the source storage location.'), { statusCode: 400 });
+  }
+  sourceLocation = sourceStorageLocation.locationName;
+  destinationLocation = destinationStorageLocation.locationName;
+  fromLocationId = sourceStorageLocation._id;
+  toLocationId = destinationStorageLocation._id;
   const existing = idempotencyKey
     ? await StockMovement.findOne({ hotelId, propertyId, idempotencyKey: `${idempotencyKey}:out` }).session(session)
     : null;
@@ -1368,7 +1458,11 @@ export const transferStock = async ({
   const converted = convertQuantityToBase(item, enteredQuantity, unit || item.baseUnit || item.unit, conversionFactor);
   const qty = roundQuantity(converted.quantity);
   const allSourceBatches = await InventoryBatch.find({
-    hotelId, propertyId, itemId: item._id, location: sourceLocation, remainingQuantity: { $gt: 0 }
+    hotelId,
+    propertyId,
+    itemId: item._id,
+    $or: [{ locationId: fromLocationId }, { locationId: null, location: sourceLocation }],
+    remainingQuantity: { $gt: 0 }
   }).sort({ receivedAt: 1, _id: 1 }).session(session);
   const now = new Date();
   const hasExpiryBatches = allSourceBatches.some((batch) => Boolean(batch.expiryDate));
@@ -1380,10 +1474,10 @@ export const transferStock = async ({
     throw Object.assign(new Error(`Insufficient tracked stock at ${sourceLocation} for ${item.name}.`), { statusCode: 409 });
   }
   const source = await updateBalance({
-    hotelId, propertyId, item, location: sourceLocation, delta: -qty, session
+    hotelId, propertyId, item, location: sourceLocation, locationId: fromLocationId, delta: -qty, session
   });
   const destination = await updateBalance({
-    hotelId, propertyId, item, location: destinationLocation, delta: qty, session
+    hotelId, propertyId, item, location: destinationLocation, locationId: toLocationId, delta: qty, session
   });
   let batchQuantityToMove = Math.min(qty, sourceBatchQuantity);
   for (const batch of sourceBatches) {
@@ -1401,6 +1495,7 @@ export const transferStock = async ({
       propertyId,
       itemId: item._id,
       location: destinationLocation,
+      locationId: toLocationId,
       batchNumber: batch.batchNumber,
       quantity: movedQuantity,
       remainingQuantity: movedQuantity,
@@ -1420,6 +1515,8 @@ export const transferStock = async ({
     sourceDepartment,
     destinationDepartment,
     department: transferMode === 'department' ? '' : department,
+    destinationLocation,
+    destinationLocationId: toLocationId,
     metadata: {
       fromLocation: sourceLocation,
       toLocation: destinationLocation,
@@ -1430,6 +1527,7 @@ export const transferStock = async ({
     {
       ...common,
       location: sourceLocation,
+      locationId: fromLocationId,
       department: transferMode === 'department' ? sourceDepartment : department,
       idempotencyKey: idempotencyKey ? `${idempotencyKey}:out` : undefined,
       metadata: { ...common.metadata, locationPreviousStock: source.previous, locationNewStock: source.current }
@@ -1437,7 +1535,7 @@ export const transferStock = async ({
     {
       ...common,
       location: destinationLocation,
-      destinationLocation,
+      locationId: toLocationId,
       department: transferMode === 'department' ? destinationDepartment : department,
       idempotencyKey: idempotencyKey ? `${idempotencyKey}:in` : undefined,
       metadata: { ...common.metadata, locationPreviousStock: destination.previous, locationNewStock: destination.current }
@@ -1466,6 +1564,16 @@ export const consumeRecipesForOrder = async (order, session, {
   for (const recipe of recipes) {
     if (!latestRecipes.has(String(recipe.menuItemId))) latestRecipes.set(String(recipe.menuItemId), recipe);
   }
+  const recipeLocations = new Map();
+  for (const recipe of latestRecipes.values()) {
+    if (recipe.productionMode === 'batch_production') continue;
+    recipeLocations.set(String(recipe._id), await resolveStorageLocation({
+      hotelId: order.hotelId,
+      locationId: recipe.locationId,
+      locationName: recipe.location || 'Restaurant Store',
+      session
+    }));
+  }
 
   const required = new Map();
   for (const soldLine of order.items) {
@@ -1493,6 +1601,7 @@ export const consumeRecipesForOrder = async (order, session, {
       if (!item) throw Object.assign(new Error('A recipe ingredient is no longer an active inventory item.'), { statusCode: 409 });
       const converted = convertQuantityToBase(item, enteredQuantity, unit, conversionFactor || undefined);
       const quantity = roundQuantity(converted.quantity);
+      const storageLocation = recipeLocations.get(String(recipe._id));
       const source = {
         menuItemId: soldLine.menuItemId,
         menuItemName: soldLine.name,
@@ -1501,16 +1610,22 @@ export const consumeRecipesForOrder = async (order, session, {
         unit: item.baseUnit || item.unit,
         enteredQuantity,
         enteredUnit: converted.unit,
-        conversionFactor: converted.factor
+        conversionFactor: converted.factor,
+        locationId: storageLocation._id,
+        location: storageLocation.locationName
       };
-      const prior = required.get(itemId);
+      const requirementKey = `${itemId}:${storageLocation._id}`;
+      const prior = required.get(requirementKey);
       if (prior) {
         prior.quantity = roundQuantity(prior.quantity + quantity);
         prior.sources.push(source);
       } else {
-        required.set(itemId, {
+        required.set(requirementKey, {
           item, quantity, menuItemId: soldLine.menuItemId, menuItemName: soldLine.name,
-          version: recipe.version, unit: item.unit, sources: [source]
+          version: recipe.version, unit: item.unit,
+          locationId: storageLocation._id,
+          location: storageLocation.locationName,
+          sources: [source]
         });
       }
     }
@@ -1526,7 +1641,8 @@ export const consumeRecipesForOrder = async (order, session, {
       itemId: requirement.item._id,
       movementType: 'recipe_consumption',
       quantity: requirement.quantity,
-      location: 'Restaurant Store',
+      location: requirement.location,
+      locationId: requirement.locationId,
       department: 'Restaurant',
       referenceNumber: order.orderNumber,
       notes: `Recipe consumption for finalized restaurant order ${order.orderNumber}`,

@@ -139,7 +139,11 @@ describe('recipe-based inventory management', () => {
       hotelId,
       categoryId: category._id,
       name: 'Bulk Recipe Test Dish',
-      price: 5
+      price: 5,
+      nonAcPrice: 5,
+      nonAcPricingEnabled: true,
+      acPrice: 7,
+      acPricingEnabled: true
     });
     const bulkRecipeResponse = await invoke(saveRecipe, requestFor({
       propertyId: property._id,
@@ -159,9 +163,32 @@ describe('recipe-based inventory management', () => {
       (recipe) => String(recipe._id) === String(bulkRecipeResponse.body.data._id)
     );
     expect(bulkRecipe).toMatchObject({
+      menuItemId: {
+        price: 5,
+        nonAcPrice: 5,
+        nonAcPricingEnabled: true,
+        acPrice: 7,
+        acPricingEnabled: true
+      },
       estimatedRecipeCost: 0.12,
       totalRecipeCost: 0.33,
       sellingPrice: 5,
+      diningTypePricing: {
+        ac: {
+          enabled: true,
+          sellingPrice: 7,
+          estimatedGrossProfit: 6.88,
+          estimatedProfitWhole: 18.57,
+          foodCostPercent: 1.71
+        },
+        nonAc: {
+          enabled: true,
+          sellingPrice: 5,
+          estimatedGrossProfit: 4.88,
+          estimatedProfitWhole: 13.17,
+          foodCostPercent: 2.4
+        }
+      },
       expectedProductionYield: 3,
       expectedPreparationLossQuantity: 0.3,
       expectedUsableQuantity: 2.7,
@@ -487,6 +514,10 @@ describe('recipe-based inventory management', () => {
     expect(production.batch.acceptedQuantity).toBe(18);
     expect(production.batch.productionCost).toBe(4);
     expect(production.batch.rawMaterialWastageCost).toBe(0.1);
+    expect(production.batch.sellingPrice).toBe(12);
+    await MenuItem.findByIdAndUpdate(menuItem._id, { price: 15, nonAcPrice: 15, acPrice: 18 });
+    expect((await ProductionBatch.findById(production.batch._id)).sellingPrice).toBe(12);
+    await MenuItem.findByIdAndUpdate(menuItem._id, { price: 12, nonAcPrice: null, acPrice: null });
     expect((await InventoryItem.findById(ingredient._id)).currentStock).toBe(795);
 
     const retry = await invoke(createProductionEntry, requestFor({
@@ -746,6 +777,28 @@ describe('recipe-based inventory management', () => {
     expect(closedBatch.availableQuantity).toBe(10);
     expect(closedBatch.wastedQuantity).toBe(2);
     expect(await PreparedFoodMovement.countDocuments({ productionBatchId: production.batch._id, movementType: 'wastage' })).toBe(1);
+    await runInventoryTransaction((session) => recordPreparedFoodUse({
+      hotelId,
+      propertyId: property._id,
+      productionBatchId: production.batch._id,
+      movementType: 'unrecorded_consumption',
+      quantity: 1,
+      reason: 'Physical count shortfall',
+      recordedBy: actorId,
+      idempotencyKey: `unrecorded-food-test:${new mongoose.Types.ObjectId()}`
+    }, session));
+    const reconciledBatch = await ProductionBatch.findById(production.batch._id);
+    expect(reconciledBatch.availableQuantity).toBe(9);
+    expect(reconciledBatch.unrecordedQuantity).toBe(1);
+    expect(await PreparedFoodMovement.findOne({
+      productionBatchId: production.batch._id,
+      movementType: 'unrecorded_consumption'
+    })).toMatchObject({
+      quantity: 1,
+      unitCost: 0.22,
+      totalCost: 0.22,
+      reason: 'Physical count shortfall'
+    });
     const closingDashboard = await invoke(getProductionDashboard, requestFor({
       propertyId: property._id,
       query: {
@@ -758,7 +811,9 @@ describe('recipe-based inventory management', () => {
       soldQuantity: 5,
       transferredOutQuantity: 4,
       wastedQuantity: 2,
-      availableQuantity: 14
+      unrecordedQuantity: 1,
+      unrecordedFoodCost: 0.22,
+      availableQuantity: 13
     });
   });
 

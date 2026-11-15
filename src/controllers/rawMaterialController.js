@@ -11,6 +11,7 @@ import {
 import { getUnitConversionFactor, INVENTORY_UNIT_MASTER } from '../config/inventoryUnits.js';
 import { logAudit } from '../services/auditService.js';
 import { evaluateAutomaticReorder, runInventoryTransaction } from '../services/inventoryService.js';
+import { resolveStorageLocation } from '../services/storageLocationService.js';
 
 const isAdministrator = (user) => ['hotel_admin', 'super_admin'].includes(user?.role);
 const sendError = (res, status, message) => res.status(status).json({ success: false, message });
@@ -465,6 +466,7 @@ export const getRawMaterials = async (req, res, next) => {
       .populate('preferredPurchaseUnitId', 'name symbol category isActive')
       .populate('supportedUnits.unitId', 'name symbol category isActive')
       .populate('supportedUnits.packageMeasurementUnitId', 'name symbol category isActive')
+      .populate('locationId', 'locationName locationTypeId')
       .sort({ name: 1 })
       .lean();
     res.json({ success: true, data: materials });
@@ -551,6 +553,11 @@ const saveRawMaterial = async ({ req, currentItem = null }) => {
       unitId: unit.unitId,
       conversionFactor: unit.conversionFactorToBase
     }));
+  const storageLocation = await resolveStorageLocation({
+    hotelId: req.hotelId,
+    locationId: req.body.locationId ?? currentItem?.locationId,
+    locationName: req.body.location ?? currentItem?.location ?? 'Main Store'
+  });
   const itemFields = {
     name,
     category: 'food_ingredients',
@@ -559,7 +566,8 @@ const saveRawMaterial = async ({ req, currentItem = null }) => {
     subcategoryId: categoryResult.subcategory._id,
     description: normalize(req.body.description ?? currentItem?.description),
     storageType: normalize(req.body.storageType ?? currentItem?.storageType),
-    location: normalize(req.body.location ?? currentItem?.location ?? 'Main Store') || 'Main Store',
+    location: storageLocation.locationName,
+    locationId: storageLocation._id,
     baseUnit: baseUnit.symbol,
     unit: baseUnit.symbol,
     baseUnitId: baseUnit._id,

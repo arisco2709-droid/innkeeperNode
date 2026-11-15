@@ -16,6 +16,7 @@ const stockReceiptRequestSchema = new mongoose.Schema({
   vendorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor', default: null },
   department: { type: String, trim: true, default: '' },
   location: { type: String, trim: true, default: 'Main Store' },
+  locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'StorageLocation', default: null, index: true },
   expiryDate: { type: Date, default: null },
   notes: { type: String, trim: true, default: '' },
   previousBatches: { type: [previousBatchSchema], default: [] },

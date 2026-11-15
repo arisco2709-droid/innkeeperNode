@@ -27,6 +27,24 @@ const menuItemSchema = new mongoose.Schema({
     required: true,
     min: 0
   },
+  acPricingEnabled: {
+    type: Boolean,
+    default: false
+  },
+  acPrice: {
+    type: Number,
+    min: 0,
+    default: null
+  },
+  nonAcPricingEnabled: {
+    type: Boolean,
+    default: true
+  },
+  nonAcPrice: {
+    type: Number,
+    min: 0,
+    default: null
+  },
   taxPercent: {
     type: Number,
     default: 5
@@ -48,4 +66,3 @@ const menuItemSchema = new mongoose.Schema({
 });
 
 export const MenuItem = mongoose.models.MenuItem || mongoose.model('MenuItem', menuItemSchema);
-

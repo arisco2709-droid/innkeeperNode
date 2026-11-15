@@ -109,6 +109,7 @@ export const getProductionDashboard = async (req, res, next) => {
           grossProfit: Math.round((salesRevenue - soldFoodCost) * 100) / 100,
           wastageCost: Math.round(Number(batch.wastedQuantity || 0) * Number(batch.costPerPortion || 0) * 100) / 100,
           complimentaryCost: Math.round(Number(batch.complimentaryQuantity || 0) * Number(batch.costPerPortion || 0) * 100) / 100,
+          unrecordedFoodCost: Math.round(Number(batch.unrecordedQuantity || 0) * Number(batch.costPerPortion || 0) * 100) / 100,
           staffConsumptionCost: Math.round(Number(batch.staffConsumptionQuantity || 0) * Number(batch.costPerPortion || 0) * 100) / 100,
           remainingInventoryValue: Math.round(Number(batch.availableQuantity || 0) * Number(batch.costPerPortion || 0) * 100) / 100
         });
@@ -124,9 +125,9 @@ export const getProductionDashboard = async (req, res, next) => {
     const totals = data.reduce((result, batch) => {
       for (const field of [
         'productionQuantity', 'acceptedQuantity', 'availableQuantity', 'reservedQuantity', 'remainingQuantity',
-        'soldQuantity', 'wastedQuantity', 'complimentaryQuantity', 'staffConsumptionQuantity', 'transferredOutQuantity',
+        'soldQuantity', 'wastedQuantity', 'complimentaryQuantity', 'unrecordedQuantity', 'staffConsumptionQuantity', 'transferredOutQuantity',
         'productionCost', 'rawMaterialWastageCost', 'salesRevenue', 'soldFoodCost', 'grossProfit',
-        'wastageCost', 'complimentaryCost', 'staffConsumptionCost', 'remainingInventoryValue'
+        'wastageCost', 'complimentaryCost', 'unrecordedFoodCost', 'staffConsumptionCost', 'remainingInventoryValue'
       ]) {
         if (batch.isTransferBatch && [
           'productionQuantity', 'acceptedQuantity', 'productionCost', 'rawMaterialWastageCost'
@@ -149,7 +150,7 @@ export const getProductionDashboard = async (req, res, next) => {
     } else {
       for (const field of [
         'productionCost', 'rawMaterialWastageCost', 'salesRevenue', 'soldFoodCost', 'grossProfit',
-        'wastageCost', 'complimentaryCost', 'staffConsumptionCost', 'remainingInventoryValue'
+        'wastageCost', 'complimentaryCost', 'unrecordedFoodCost', 'staffConsumptionCost', 'remainingInventoryValue'
       ]) delete totals[field];
     }
     const selectedBatchIds = batches.map((batch) => batch._id);
@@ -160,7 +161,9 @@ export const getProductionDashboard = async (req, res, next) => {
     if (!['hotel_admin', 'super_admin'].includes(req.user?.role)) {
       movementQuery = movementQuery.select('-salesRevenue -unitCost -totalCost');
     }
-    const recentMovements = await movementQuery.populate('recordedBy', 'name')
+    const recentMovements = await movementQuery
+      .populate('recordedBy', 'name')
+      .populate('menuItemId', 'name')
       .sort({ createdAt: -1 })
       .limit(100)
       .lean();
@@ -246,7 +249,11 @@ export const recordPreparedFoodMovement = async (req, res, next) => {
     if (!result.duplicate) {
       await logAudit({
         hotelId: req.hotelId,
-        action: movementType === 'wastage' ? 'RECORD_PREPARED_FOOD_WASTAGE' : 'RECORD_PREPARED_FOOD_USE',
+        action: movementType === 'wastage'
+          ? 'RECORD_PREPARED_FOOD_WASTAGE'
+          : movementType === 'unrecorded_consumption'
+            ? 'RECORD_UNRECORDED_PREPARED_FOOD'
+            : 'RECORD_PREPARED_FOOD_USE',
         entity: 'PreparedFoodMovement',
         entityId: result.movement._id,
         details: { productionBatchId: req.params.id, movementType, quantity: result.movement.quantity, reason },
@@ -280,6 +287,7 @@ export const transferProductionBatch = async (req, res, next) => {
       productionBatchId: req.params.id,
       quantity: req.body.quantity,
       destinationLocation: req.body.destinationLocation,
+      destinationLocationId: req.body.destinationLocationId,
       notes: req.body.notes || '',
       recordedBy: req.user._id,
       idempotencyKey

@@ -15,7 +15,7 @@ import {
   getRawMaterialSubcategories
 } from '../controllers/rawMaterialController.js';
 import { createDefaultInventoryUnits, createInventoryUnit } from '../controllers/inventoryUnitController.js';
-import { GoodsReceipt, InventoryItem, PurchaseOrder, StockMovement, Unit, Vendor } from '../models/index.js';
+import { GoodsReceipt, InventoryBatch, InventoryItem, PurchaseOrder, StockMovement, Unit, Vendor } from '../models/index.js';
 import { setup, teardown } from './setup.js';
 
 const hotelId = new mongoose.Types.ObjectId();
@@ -269,7 +269,8 @@ describe('raw material master API', () => {
           unit: 'bag',
           quantity: 2,
           unitCost: 500
-        }]
+        }],
+        taxAmount: 100
       }
     }));
     expect(purchase.statusCode).toBe(201);
@@ -367,10 +368,16 @@ describe('raw material master API', () => {
       unitNameSnapshot: 'Big Bag',
       packageNameSnapshot: 'Big Bag',
       baseUnitNameSnapshot: 'Gram',
-      conversionFactor: 25000
+      conversionFactor: 25000,
+      purchaseTaxAmount: 100,
+      taxInclusiveUnitCost: 550
     });
+    expect(receipt.purchaseTaxAmount).toBe(100);
     const stockMovement = await StockMovement.findOne({ itemId: created.body.data._id, movementType: 'receipt' });
     expect(stockMovement.conversionFactor).toBe(25000);
+    const taxInclusiveBatch = await InventoryBatch.findOne({ purchaseOrderId: purchaseOrder._id });
+    expect(taxInclusiveBatch.unitCost).toBeCloseTo(550 / 25000, 8);
+    expect(taxInclusiveBatch.purchaseTaxAmount).toBe(100);
     expect((await InventoryItem.findById(created.body.data._id)).currentStock).toBe(50000);
     const reconfigured = await invoke(updateRawMaterial, requestFor({
       params: { id: String(created.body.data._id) },
@@ -423,6 +430,24 @@ describe('raw material master API', () => {
       conversionFactor: 5000
     });
     expect((await InventoryItem.findById(created.body.data._id)).currentStock).toBe(70500);
+    const taxInclusiveReceipt = await invoke(recordStockMovement, requestFor({
+      body: {
+        itemId: String(created.body.data._id),
+        movementType: 'receipt',
+        quantity: 5000,
+        unit: 'g',
+        purchaseUnitPrice: 0.02,
+        purchaseTaxAmount: 10
+      }
+    }));
+    expect(taxInclusiveReceipt.statusCode).toBe(201);
+    const directReceiptBatch = await InventoryBatch.findOne({
+      itemId: created.body.data._id,
+      purchaseTaxAmount: 10
+    });
+    expect(directReceiptBatch.unitCost).toBeCloseTo(0.022, 8);
+    expect(directReceiptBatch.purchaseTaxAmount).toBe(10);
+    expect((await InventoryItem.findById(created.body.data._id)).currentStock).toBe(75500);
     expect(await InventoryItem.countDocuments({ hotelId, propertyId, inventoryType: 'raw_material' })).toBe(2);
   });
 });

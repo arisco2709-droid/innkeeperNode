@@ -71,7 +71,9 @@ const stockMovementSchema = new mongoose.Schema({
     ref: 'User'
   },
   location: { type: String, trim: true, default: 'Main Store' },
+  locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'StorageLocation', default: null, index: true },
   destinationLocation: { type: String, trim: true, default: '' },
+  destinationLocationId: { type: mongoose.Schema.Types.ObjectId, ref: 'StorageLocation', default: null },
   department: { type: String, trim: true, default: '' },
   sourceDepartment: { type: String, trim: true, default: '' },
   destinationDepartment: { type: String, trim: true, default: '' },

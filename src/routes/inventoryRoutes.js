@@ -68,6 +68,12 @@ import {
   recordPreparedFoodMovement,
   transferProductionBatch
 } from '../controllers/productionController.js';
+import {
+  createStorageLocation,
+  getStorageLocationTypes,
+  getStorageLocations,
+  updateStorageLocation
+} from '../controllers/storageLocationController.js';
 import { authenticate, requireTenant, authorize } from '../middlewares/auth.js';
 import { ROLES } from '../config/constants.js';
 import { validatePhoneFields } from '../middlewares/phoneValidator.js';
@@ -102,6 +108,10 @@ router.patch('/settings', authorize(ROLES.HOTEL_ADMIN), updateInventorySettings)
 router.get('/verifications', getStockVerifications);
 router.post('/verifications', createStockVerification);
 router.get('/locations', getStockLocations);
+router.get('/storage-location-types', getStorageLocationTypes);
+router.get('/storage-locations', getStorageLocations);
+router.post('/storage-locations', authorize(ROLES.HOTEL_ADMIN), createStorageLocation);
+router.patch('/storage-locations/:id', authorize(ROLES.HOTEL_ADMIN), updateStorageLocation);
 router.post('/transfers', authorize(ROLES.HOTEL_ADMIN), transferStockBetweenLocations);
 router.get('/ledger', getStockLedger);
 router.get('/adjustments', getStockAdjustments);

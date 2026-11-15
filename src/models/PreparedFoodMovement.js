@@ -7,7 +7,7 @@ const preparedFoodMovementSchema = new mongoose.Schema({
   menuItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'MenuItem', required: true },
   movementType: {
     type: String,
-    enum: ['production_receipt', 'reservation', 'reservation_release', 'sale', 'sale_reversal', 'wastage', 'complimentary', 'staff_consumption', 'transfer_out', 'transfer_in', 'reversal'],
+    enum: ['production_receipt', 'reservation', 'reservation_release', 'sale', 'sale_reversal', 'wastage', 'complimentary', 'unrecorded_consumption', 'staff_consumption', 'transfer_out', 'transfer_in', 'reversal'],
     required: true
   },
   quantity: { type: Number, required: true, min: 0.00000001 },
@@ -20,7 +20,9 @@ const preparedFoodMovementSchema = new mongoose.Schema({
   idempotencyKey: { type: String, default: undefined },
   reason: { type: String, trim: true, default: '' },
   location: { type: String, trim: true, default: '' },
+  locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'StorageLocation', default: null, index: true },
   destinationLocation: { type: String, trim: true, default: '' },
+  destinationLocationId: { type: mongoose.Schema.Types.ObjectId, ref: 'StorageLocation', default: null },
   recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   notes: { type: String, trim: true, default: '' }
 }, { timestamps: true });

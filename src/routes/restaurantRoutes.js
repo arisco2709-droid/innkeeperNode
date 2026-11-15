@@ -17,6 +17,12 @@ import {
   restoreArchivedBill,
   transferToRoomFolio
 } from '../controllers/restaurantController.js';
+import {
+  getRestaurantBillingHistory,
+  hideRestaurantBillingReport,
+  requestRestaurantBillingReportRestore,
+  reviewRestaurantBillingReportRestore
+} from '../controllers/restaurantBillingController.js';
 import { authenticate, requireTenant, authorize } from '../middlewares/auth.js';
 import { ROLES } from '../config/constants.js';
 
@@ -32,6 +38,10 @@ router.post('/items', authorize(ROLES.HOTEL_ADMIN), createMenuItem);
 router.patch('/items/:id', authorize(ROLES.HOTEL_ADMIN), updateMenuItem);
 
 router.get('/orders', authorize(ROLES.HOTEL_ADMIN, ROLES.RESTAURANT_STAFF), getOrders);
+router.get('/billing-history', authorize(ROLES.HOTEL_ADMIN, ROLES.SUPER_ADMIN), getRestaurantBillingHistory);
+router.post('/billing-history/:date/hide', authorize(ROLES.HOTEL_ADMIN), hideRestaurantBillingReport);
+router.post('/billing-history/:date/restore-requests', authorize(ROLES.HOTEL_ADMIN), requestRestaurantBillingReportRestore);
+router.patch('/billing-history/restore-requests/:requestId', authorize(ROLES.SUPER_ADMIN), reviewRestaurantBillingReportRestore);
 router.post('/orders', authorize(ROLES.HOTEL_ADMIN, ROLES.RESTAURANT_STAFF), createOrder);
 router.patch('/orders/:id/status', authorize(ROLES.HOTEL_ADMIN, ROLES.RESTAURANT_STAFF), updateOrderStatus);
 router.patch('/orders/:id/bill-amounts', authorize(ROLES.HOTEL_ADMIN, ROLES.RESTAURANT_STAFF), updateBillAmounts);

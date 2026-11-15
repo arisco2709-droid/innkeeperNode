@@ -125,7 +125,8 @@ const inventoryItemSchema = new mongoose.Schema({
   location: {
     type: String,
     default: 'Main Store'
-  }
+  },
+  locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'StorageLocation', default: null, index: true }
 }, {
   timestamps: true
 });

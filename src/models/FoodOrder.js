@@ -20,6 +20,15 @@ const orderItemSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  unitPriceSnapshot: {
+    type: Number,
+    min: 0
+  },
+  diningType: {
+    type: String,
+    enum: ['ac', 'non_ac'],
+    default: 'non_ac'
+  },
   amount: {
     type: Number,
     required: true
@@ -88,6 +97,11 @@ const foodOrderSchema = new mongoose.Schema({
     enum: ['dine_in', 'room_service', 'takeaway'],
     default: 'dine_in'
   },
+  diningType: {
+    type: String,
+    enum: ['ac', 'non_ac'],
+    default: 'non_ac'
+  },
   tableNumber: {
     type: String,
     default: ''
@@ -150,8 +164,30 @@ const foodOrderSchema = new mongoose.Schema({
   },
   paymentStatus: {
     type: String,
-    enum: ['unpaid', 'paid', 'transferred_to_folio'],
+    enum: ['unpaid', 'partially_paid', 'paid', 'refunded', 'transferred_to_folio'],
     default: 'unpaid'
+  },
+  paidAmount: {
+    type: Number,
+    min: 0,
+    default: 0
+  },
+  refundedAmount: {
+    type: Number,
+    min: 0,
+    default: 0
+  },
+  paidAt: {
+    type: Date,
+    default: null
+  },
+  transferredAt: {
+    type: Date,
+    default: null
+  },
+  refundedAt: {
+    type: Date,
+    default: null
   },
   paymentMethod: String,
   notes: {

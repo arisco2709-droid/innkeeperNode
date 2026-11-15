@@ -35,6 +35,49 @@ const resolveRestaurantProperty = async (req, res) => {
   return property._id;
 };
 
+const getMenuItemPrice = (menuItem, diningType) => {
+  if (diningType === 'ac') {
+    return menuItem.acPricingEnabled === true && Number.isFinite(menuItem.acPrice)
+      ? menuItem.acPrice
+      : null;
+  }
+  if (menuItem.nonAcPricingEnabled === false) return null;
+  const price = menuItem.nonAcPrice ?? menuItem.price;
+  return Number.isFinite(price) ? price : null;
+};
+
+const validateMenuItemPricing = (pricing, currentItem = null) => {
+  const { acPricingEnabled, acPrice, nonAcPricingEnabled, nonAcPrice, price } = pricing;
+  for (const [field, value] of Object.entries({ acPrice, nonAcPrice, price })) {
+    if (value !== undefined && (value === null || (typeof value === 'string' && !value.trim())
+      || !Number.isFinite(Number(value)) || Number(value) < 0)) {
+      return `${field} must be a non-negative number.`;
+    }
+  }
+  for (const [field, value] of Object.entries({ acPricingEnabled, nonAcPricingEnabled })) {
+    if (value !== undefined && typeof value !== 'boolean') {
+      return `${field} must be a boolean.`;
+    }
+  }
+  if (acPricingEnabled === true && acPrice === undefined && currentItem?.acPrice == null) {
+    return 'An AC price is required when AC pricing is enabled.';
+  }
+  if (nonAcPricingEnabled === true && nonAcPrice === undefined && price === undefined
+    && currentItem?.nonAcPrice == null && currentItem?.price == null) {
+    return 'A Non-AC price is required when Non-AC pricing is enabled.';
+  }
+  return null;
+};
+
+const getMenuItemTaxPercent = (body) => {
+  const value = body.taxPercent ?? body.taxRate;
+  if (value === undefined) return undefined;
+  const taxPercent = Number(value);
+  return Number.isFinite(taxPercent) && taxPercent >= 0 && taxPercent <= 100
+    ? taxPercent
+    : null;
+};
+
 export const getTables = async (req, res, next) => {
   try {
     const propertyId = await resolveRestaurantProperty(req, res);
@@ -67,8 +110,12 @@ export const createTable = async (req, res, next) => {
 
     const capacity = Number(req.body.capacity ?? 4);
     const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+    const diningType = req.body.diningType ?? 'non_ac';
     if (!Number.isInteger(capacity) || capacity < 1) {
       return res.status(400).json({ success: false, message: 'Table capacity must be a positive whole number.' });
+    }
+    if (!['ac', 'non_ac'].includes(diningType)) {
+      return res.status(400).json({ success: false, message: 'Table dining type must be ac or non_ac.' });
     }
 
     let table;
@@ -85,6 +132,7 @@ export const createTable = async (req, res, next) => {
           tableNumber: (lastTable?.tableNumber || 0) + 1,
           name,
           capacity,
+          diningType,
           status: 'available'
         });
         break;
@@ -127,6 +175,12 @@ export const updateTable = async (req, res, next) => {
       }
       updates.capacity = capacity;
     }
+    if (req.body.diningType !== undefined) {
+      if (!['ac', 'non_ac'].includes(req.body.diningType)) {
+        return res.status(400).json({ success: false, message: 'Table dining type must be ac or non_ac.' });
+      }
+      updates.diningType = req.body.diningType;
+    }
     if (req.body.status !== undefined) {
       if (!['available', 'reserved'].includes(req.body.status)) {
         return res.status(400).json({ success: false, message: 'Table status must be available or reserved.' });
@@ -141,7 +195,7 @@ export const updateTable = async (req, res, next) => {
     }
 
     const filter = { _id: req.params.id, hotelId: req.hotelId, propertyId };
-    if (updates.isActive === false) filter.activeOrderId = null;
+    if (updates.isActive === false || updates.diningType !== undefined) filter.activeOrderId = null;
     const table = await RestaurantTable.findOneAndUpdate(filter, { $set: updates }, {
       new: true,
       runValidators: true
@@ -149,7 +203,7 @@ export const updateTable = async (req, res, next) => {
     if (!table) {
       return res.status(404).json({
         success: false,
-        message: 'Table not found or cannot be deactivated while an order is active.'
+        message: 'Table not found or its type/availability cannot be changed while an order is active.'
       });
     }
 
@@ -258,8 +312,20 @@ export const updateCategory = async (req, res, next) => {
 
 export const createMenuItem = async (req, res, next) => {
   try {
+    const taxPercent = getMenuItemTaxPercent(req.body);
+    if (taxPercent === null) {
+      return res.status(400).json({ success: false, message: 'Tax rate must be between 0 and 100 percent.' });
+    }
+    const pricingError = validateMenuItemPricing(req.body);
+    if (pricingError) {
+      return res.status(400).json({ success: false, message: pricingError });
+    }
+    const legacyPrice = req.body.nonAcPrice ?? req.body.price ?? req.body.acPrice ?? 0;
     const item = await MenuItem.create({
       ...req.body,
+      price: legacyPrice,
+      nonAcPrice: req.body.nonAcPrice ?? (req.body.price !== undefined ? req.body.price : null),
+      ...(taxPercent !== undefined ? { taxPercent } : {}),
       hotelId: req.hotelId
     });
     res.status(201).json({ success: true, data: item });
@@ -270,14 +336,30 @@ export const createMenuItem = async (req, res, next) => {
 
 export const updateMenuItem = async (req, res, next) => {
   try {
-    const item = await MenuItem.findOneAndUpdate(
-      { _id: req.params.id, hotelId: req.hotelId },
-      req.body,
-      { new: true }
-    ).populate('categoryId');
-    if (!item) {
+    const taxPercent = getMenuItemTaxPercent(req.body);
+    if (taxPercent === null) {
+      return res.status(400).json({ success: false, message: 'Tax rate must be between 0 and 100 percent.' });
+    }
+    const currentItem = await MenuItem.findOne({ _id: req.params.id, hotelId: req.hotelId });
+    if (!currentItem) {
       return res.status(404).json({ success: false, message: 'Menu item not found.' });
     }
+    const pricingError = validateMenuItemPricing(req.body, currentItem);
+    if (pricingError) {
+      return res.status(400).json({ success: false, message: pricingError });
+    }
+    const updates = { ...req.body };
+    delete updates.taxRate;
+    if (taxPercent !== undefined) updates.taxPercent = taxPercent;
+    if (req.body.nonAcPrice !== undefined) updates.price = Number(req.body.nonAcPrice);
+    else if (req.body.price !== undefined && currentItem.nonAcPricingEnabled !== false) {
+      updates.nonAcPrice = Number(req.body.price);
+    }
+    const item = await MenuItem.findOneAndUpdate(
+      { _id: req.params.id, hotelId: req.hotelId },
+      updates,
+      { new: true, runValidators: true }
+    ).populate('categoryId');
     res.json({ success: true, data: item });
   } catch (err) {
     next(err);
@@ -389,7 +471,7 @@ export const restoreArchivedBill = async (req, res, next) => {
   }
 };
 
-const appendItemsToOpenTableOrder = async ({ req, propertyId, table, orderItems }) => {
+const appendItemsToOpenTableOrder = async ({ req, propertyId, table, orderItems, diningType }) => {
   const result = await runInventoryTransaction(async (session) => {
     const existing = await FoodOrder.findOne({
       _id: table.activeOrderId,
@@ -405,6 +487,14 @@ const appendItemsToOpenTableOrder = async ({ req, propertyId, table, orderItems 
         error: {
           status: 409,
           message: 'This table bill is already closed. Refresh and choose the table again.'
+        }
+      };
+    }
+    if ((existing.diningType || 'non_ac') !== diningType) {
+      return {
+        error: {
+          status: 409,
+          message: `This table is already using ${existing.diningType === 'ac' ? 'AC' : 'Non-AC'} pricing.`
         }
       };
     }
@@ -476,6 +566,7 @@ export const createOrder = async (req, res, next) => {
     if (!propertyId) return;
     const {
       orderType = 'dine_in',
+      diningType: requestedDiningType = 'non_ac',
       tableId,
       roomId = null,
       reservationId = null,
@@ -486,6 +577,9 @@ export const createOrder = async (req, res, next) => {
     if (!['dine_in', 'room_service', 'takeaway'].includes(orderType)) {
       return res.status(400).json({ success: false, message: 'Invalid restaurant order type.' });
     }
+    if (!['ac', 'non_ac'].includes(requestedDiningType)) {
+      return res.status(400).json({ success: false, message: 'Invalid restaurant dining type.' });
+    }
     if (!items || items.length === 0) {
       return res.status(400).json({ success: false, message: 'At least one item is required.' });
     }
@@ -494,6 +588,32 @@ export const createOrder = async (req, res, next) => {
     }
     if (orderType === 'dine_in' && !mongoose.isValidObjectId(tableId)) {
       return res.status(400).json({ success: false, message: 'Select a valid restaurant table.' });
+    }
+
+    let selectedDineInTable = null;
+    let diningType = requestedDiningType;
+    if (orderType === 'dine_in') {
+      selectedDineInTable = await RestaurantTable.findOne({
+        _id: tableId,
+        hotelId: req.hotelId,
+        propertyId,
+        isActive: true
+      });
+      if (!selectedDineInTable) {
+        return res.status(409).json({
+          success: false,
+          message: 'This table is unavailable or already assigned to an active order.'
+        });
+      }
+      diningType = selectedDineInTable.diningType || 'non_ac';
+      if (selectedDineInTable.activeOrderId) {
+        const activeOrder = await FoodOrder.findOne({
+          _id: selectedDineInTable.activeOrderId,
+          hotelId: req.hotelId,
+          propertyId
+        }).select('diningType items.diningType').lean();
+        diningType = activeOrder?.diningType || activeOrder?.items?.[0]?.diningType || diningType;
+      }
     }
 
     let subtotal = 0;
@@ -513,14 +633,24 @@ export const createOrder = async (req, res, next) => {
         return res.status(400).json({ success: false, message: `Menu item not found: ${item.menuItemId}` });
       }
 
-      const itemTotal = menuItem.price * item.quantity;
+      const unitPrice = getMenuItemPrice(menuItem, diningType);
+      if (unitPrice === null) {
+        return res.status(400).json({
+          success: false,
+          message: `${menuItem.name} is not configured for ${diningType === 'ac' ? 'AC' : 'Non-AC'} pricing.`
+        });
+      }
+
+      const itemTotal = unitPrice * item.quantity;
       subtotal += itemTotal;
 
       orderItems.push({
         menuItemId: menuItem._id,
         name: menuItem.name,
         quantity: item.quantity,
-        unitPrice: menuItem.price,
+        unitPrice,
+        unitPriceSnapshot: unitPrice,
+        diningType,
         amount: itemTotal,
         fulfillmentSource: batchRecipeMenuItemIds.has(String(menuItem._id))
           ? 'batch_production'
@@ -556,25 +686,15 @@ export const createOrder = async (req, res, next) => {
 
     let table = null;
     if (orderType === 'dine_in') {
-      const existingTable = await RestaurantTable.findOne({
-        _id: tableId,
-        hotelId: req.hotelId,
-        propertyId,
-        isActive: true
-      });
-      if (!existingTable) {
-        return res.status(409).json({
-          success: false,
-          message: 'This table is unavailable or already assigned to an active order.'
-        });
-      }
+      const existingTable = selectedDineInTable;
 
       if (existingTable.activeOrderId) {
         const appended = await appendItemsToOpenTableOrder({
           req,
           propertyId,
           table: existingTable,
-          orderItems
+          orderItems,
+          diningType
         });
         if (appended.error) {
           return res.status(appended.error.status).json({
@@ -625,6 +745,7 @@ export const createOrder = async (req, res, next) => {
       propertyId,
       orderNumber,
       orderType,
+      diningType,
       tableId: table?._id || null,
       tableNumber: table ? `Table ${table.tableNumber}` : '',
       tableNameSnapshot: table?.name || '',
@@ -889,6 +1010,8 @@ export const settleOrder = async (req, res, next) => {
       }
       current.paymentStatus = 'paid';
       current.paymentMethod = req.body.paymentMethod || 'cash';
+      current.paidAmount = current.totalAmount;
+      current.paidAt = new Date();
       await current.save({ session });
       await consumeRecipesForOrder(current, session);
       const preparedFoodSales = await PreparedFoodMovement.find({
@@ -981,6 +1104,7 @@ export const transferToRoomFolio = async (req, res, next) => {
 
       order.isBilledToRoomFolio = true;
       order.paymentStatus = 'transferred_to_folio';
+      order.transferredAt = new Date();
       order.reservationId = reservation._id;
       await order.save({ session });
       await consumeRecipesForOrder(order, session);

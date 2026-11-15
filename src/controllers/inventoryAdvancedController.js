@@ -1,15 +1,53 @@
 import mongoose from 'mongoose';
 import {
   DepartmentRequest, GoodsReceipt, InventoryBalance, InventoryBatch, InventoryItem, InventoryRecipe, InventorySettings,
-  FoodOrder, StockAdjustment, StockVerification, MinibarStock, MinibarTransaction, PurchaseOrder, RecipeConsumption,
-  StockMovement, Room, Reservation, Invoice, Vendor
+  FoodOrder, Hotel, StockAdjustment, StockVerification, MinibarStock, MinibarTransaction, PurchaseOrder, RecipeConsumption,
+  PreparedFoodMovement, ProductionBatch, StockMovement, Room, Reservation, Invoice, Vendor
 } from '../models/index.js';
 import { generateReference } from '../utils/reference.js';
 import { logAudit } from '../services/auditService.js';
 import {
   getInventoryBatchAverageCosts, postStockMovement, runInventoryTransaction, transferStock
 } from '../services/inventoryService.js';
+import { resolveStorageLocation } from '../services/storageLocationService.js';
 import { convertQuantityToBase, getUnitConversionFactor, normalizeInventoryUnit } from '../config/inventoryUnits.js';
+import { combineHotelDateAndTime } from '../utils/reservationDates.js';
+
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+const isValidDateOnly = (value) => {
+  if (typeof value !== 'string' || !DATE_ONLY_PATTERN.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+};
+
+const nextDateOnly = (dateOnly) => {
+  const [year, month, day] = dateOnly.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10);
+};
+
+const hotelLocalDateFilter = (from, to, timeZone) => {
+  if (!from && !to) return undefined;
+  if ((from && !isValidDateOnly(from)) || (to && !isValidDateOnly(to))) {
+    throw Object.assign(new Error('Choose valid report dates.'), { statusCode: 400 });
+  }
+  if (from && to && from > to) {
+    throw Object.assign(new Error('The start date must be on or before the end date.'), { statusCode: 400 });
+  }
+
+  const filter = {};
+  if (from) {
+    const start = combineHotelDateAndTime(from, '00:00', timeZone);
+    if (!start) throw Object.assign(new Error('The start date is invalid for the hotel timezone.'), { statusCode: 400 });
+    filter.$gte = start;
+  }
+  if (to) {
+    const end = combineHotelDateAndTime(nextDateOnly(to), '00:00', timeZone);
+    if (!end) throw Object.assign(new Error('The end date is invalid for the hotel timezone.'), { statusCode: 400 });
+    filter.$lt = end;
+  }
+  return filter;
+};
 
 const adminOnly = (req, res) => {
   if (['hotel_admin', 'super_admin'].includes(req.user?.role)) return true;
@@ -45,7 +83,10 @@ export const getInventoryDashboard = async (req, res, next) => {
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     const expiryEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-    const [items, expiredBatches, batchValues, pendingOrders, monthPurchases, recent, expiring, monthlyPurchases, departmentUse, monthlyCosts] = await Promise.all([
+    const movementTrendStart = new Date(now);
+    movementTrendStart.setDate(movementTrendStart.getDate() - 13);
+    movementTrendStart.setHours(0, 0, 0, 0);
+    const [items, expiredBatches, batchValues, pendingOrders, monthPurchases, recent, expiring, monthlyPurchases, departmentUse, monthlyCosts, unrecordedConsumption, movementTrend] = await Promise.all([
       InventoryItem.find({ ...scope, isActive: true })
         .select('name currentStock minStockThreshold unitCost unit baseUnit stockVerificationIntervalDays createdAt')
         .lean(),
@@ -97,6 +138,53 @@ export const getInventoryDashboard = async (req, res, next) => {
         { $addFields: { effectiveDate: { $ifNull: ['$transactionDate', '$createdAt'] } } },
         { $match: { effectiveDate: { $gte: monthStart, $lt: nextMonth } } },
         { $group: { _id: '$movementType', total: { $sum: '$totalValue' } } }
+      ]),
+      StockMovement.aggregate([
+        { $match: { ...scope, movementType: 'issue', 'metadata.source': 'stock_verification_unrecorded_consumption' } },
+        { $addFields: { effectiveDate: { $ifNull: ['$transactionDate', '$createdAt'] } } },
+        { $match: { effectiveDate: { $gte: monthStart, $lt: nextMonth } } },
+        { $group: { _id: null, total: { $sum: '$totalValue' }, quantity: { $sum: '$quantity' } } }
+      ]),
+      StockMovement.aggregate([
+        {
+          $match: {
+            ...scope,
+            movementType: { $in: ['receipt', 'issue', 'department_issue', 'recipe_consumption', 'wastage', 'expiry'] }
+          }
+        },
+        { $addFields: { effectiveDate: { $ifNull: ['$transactionDate', '$createdAt'] } } },
+        { $match: { effectiveDate: { $gte: movementTrendStart, $lte: now } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$effectiveDate' } },
+            incoming: { $sum: { $cond: [{ $eq: ['$movementType', 'receipt'] }, '$totalValue', 0] } },
+            wastage: { $sum: { $cond: [{ $in: ['$movementType', ['wastage', 'expiry']] }, '$totalValue', 0] } },
+            unrecordedUsage: {
+              $sum: {
+                $cond: [
+                  { $eq: ['$metadata.source', 'stock_verification_unrecorded_consumption'] },
+                  '$totalValue',
+                  0
+                ]
+              }
+            },
+            recordedUsage: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $in: ['$movementType', ['issue', 'department_issue', 'recipe_consumption']] },
+                      { $ne: ['$metadata.source', 'stock_verification_unrecorded_consumption'] }
+                    ]
+                  },
+                  '$totalValue',
+                  0
+                ]
+              }
+            }
+          }
+        },
+        { $sort: { _id: 1 } }
       ])
     ]);
     const [settings, latestVerifications] = await Promise.all([
@@ -144,6 +232,8 @@ export const getInventoryDashboard = async (req, res, next) => {
         purchasesThisMonth: monthPurchases[0]?.total || 0,
         consumptionCostThisMonth: ['issue', 'department_issue', 'recipe_consumption']
           .reduce((sum, type) => sum + (monthlyCostByType[type] || 0), 0),
+        unrecordedConsumptionCostThisMonth: unrecordedConsumption[0]?.total || 0,
+        unrecordedConsumptionQuantityThisMonth: Math.abs(unrecordedConsumption[0]?.quantity || 0),
         wastageCostThisMonth: (monthlyCostByType.wastage || 0) + (monthlyCostByType.expiry || 0),
         purchaseCountThisMonth: monthPurchases[0]?.count || 0,
         pendingStockVerifications: pendingVerifications.length,
@@ -151,6 +241,7 @@ export const getInventoryDashboard = async (req, res, next) => {
         verificationIntervalDays: settings?.verificationIntervalDays || 1,
         monthlyPurchases,
         departmentConsumption: departmentUse,
+        movementTrend,
         recentActivities: recent,
         expiringProducts: expiring
       }
@@ -234,8 +325,8 @@ export const createStockVerification = async (req, res, next) => {
   try {
     if (!adminOnly(req, res)) return;
     const {
-      itemId, actualStock, unit, periodStart, periodEnd, location = 'Main Store',
-      consumptionQuantity = 0, consumptionUnit, consumptionReason = '',
+      itemId, actualStock, unit, periodStart, periodEnd, location = 'Main Store', locationId,
+      consumptionQuantity = 0, consumptionUnit, consumptionReason = '', department = '',
       wastageQuantity = 0, wastageUnit, wastageReason = '',
       remarks = ''
     } = req.body;
@@ -259,6 +350,11 @@ export const createStockVerification = async (req, res, next) => {
     if (numbers.some((value) => !Number.isFinite(value) || value < 0)) {
       return res.status(400).json({ success: false, message: 'Stock and reconciliation quantities must be non-negative numbers.' });
     }
+    const departments = ['Kitchen', 'Restaurant', 'Production', 'Housekeeping', 'Maintenance', 'Minibar'];
+    if ((numbers[1] > 0 && !departments.includes(department))
+      || (department && !departments.includes(department))) {
+      return res.status(400).json({ success: false, message: 'Select a supported department for unrecorded consumption.' });
+    }
     const idempotencyKey = req.body.idempotencyKey || req.get('Idempotency-Key');
     const result = await runInventoryTransaction(async (session) => {
       if (idempotencyKey) {
@@ -271,10 +367,14 @@ export const createStockVerification = async (req, res, next) => {
         _id: itemId, ...tenantFilter(req), isActive: true
       }).session(session);
       if (!item) throw Object.assign(new Error('Active inventory item not found.'), { statusCode: 404 });
+      const storageLocation = await resolveStorageLocation({
+        hotelId: req.hotelId, locationId, locationName: location, session
+      });
+      const selectedLocation = storageLocation.locationName;
       const previousVerification = await StockVerification.findOne({
         ...tenantFilter(req),
         itemId: item._id,
-        location: String(location).trim()
+        $or: [{ locationId: storageLocation._id }, { locationId: null, location: selectedLocation }]
       }).sort({ verifiedAt: -1 }).session(session);
       const requiredPeriodStart = previousVerification?.periodEnd
         ? new Date(previousVerification.periodEnd).toISOString().slice(0, 10)
@@ -291,9 +391,10 @@ export const createStockVerification = async (req, res, next) => {
         item, numbers[2], normalizeInventoryUnit(wastageUnit || selectedUnit)
       );
       const balance = await InventoryBalance.findOne({
-        ...tenantFilter(req), itemId: item._id, location: String(location).trim()
+        ...tenantFilter(req), itemId: item._id,
+        $or: [{ locationId: storageLocation._id }, { locationId: null, location: selectedLocation }]
       }).session(session);
-      const expectedStock = balance?.quantity ?? (location === 'Main Store' ? item.currentStock : 0);
+      const expectedStock = balance?.quantity ?? (selectedLocation === 'Main Store' ? item.currentStock : 0);
       const delta = Math.round((convertedActual.quantity - expectedStock + Number.EPSILON) * 1e8) / 1e8;
       const reduction = Math.max(0, -delta);
       if (convertedConsumption.quantity + convertedWastage.quantity > reduction + 1e-8) {
@@ -308,13 +409,15 @@ export const createStockVerification = async (req, res, next) => {
       const [verification] = await StockVerification.create([{
         ...tenantFilter(req),
         itemId: item._id,
-        location: String(location).trim(),
+        location: selectedLocation,
+        locationId: storageLocation._id,
         periodStart: start,
         periodEnd: end,
         expectedStock,
         actualStock: convertedActual.quantity,
         consumptionQuantity: convertedConsumption.quantity,
         consumptionReason: String(consumptionReason).trim(),
+        department: convertedConsumption.quantity > 0 ? department : '',
         wastageQuantity: convertedWastage.quantity,
         wastageReason: String(wastageReason).trim(),
         discrepancyQuantity,
@@ -330,12 +433,19 @@ export const createStockVerification = async (req, res, next) => {
         const movement = await postStockMovement({
           hotelId: req.hotelId, propertyId: req.propertyId, itemId: item._id,
           movementType: 'issue', quantity: convertedConsumption.quantity, unit: item.baseUnit || item.unit,
-          location: String(location).trim(), referenceNumber: `VER-${verification._id}`,
+          location: selectedLocation, locationId: storageLocation._id, referenceNumber: `VER-${verification._id}`,
+          department,
           notes: [
             'Physical verification consumption.',
             String(consumptionReason).trim(),
             String(remarks).trim()
           ].filter(Boolean).join(' '),
+          metadata: {
+            source: 'stock_verification_unrecorded_consumption',
+            verificationId: String(verification._id),
+            periodStart: start,
+            periodEnd: end
+          },
           recordedBy: req.user._id, idempotencyKey: `verification:${verification._id}:consumption`, session
         });
         movements.push(movement.movement._id);
@@ -344,7 +454,7 @@ export const createStockVerification = async (req, res, next) => {
         const movement = await postStockMovement({
           hotelId: req.hotelId, propertyId: req.propertyId, itemId: item._id,
           movementType: 'wastage', quantity: convertedWastage.quantity, unit: item.baseUnit || item.unit,
-          location: String(location).trim(), referenceNumber: `VER-${verification._id}`,
+          location: selectedLocation, locationId: storageLocation._id, referenceNumber: `VER-${verification._id}`,
           notes: [
             'Physical verification wastage.',
             String(wastageReason).trim(),
@@ -362,7 +472,8 @@ export const createStockVerification = async (req, res, next) => {
           movementType: 'physical_count',
           quantity: convertedActual.quantity,
           unit: item.baseUnit || item.unit,
-          location: String(location).trim(),
+          location: selectedLocation,
+          locationId: storageLocation._id,
           referenceNumber: `VER-${verification._id}`,
           notes: [discrepancyLabel, String(remarks).trim()].filter(Boolean).join('. '),
           recordedBy: req.user._id,
@@ -377,7 +488,8 @@ export const createStockVerification = async (req, res, next) => {
           conversionFactor: 1,
           baseUnit: item.baseUnit || item.unit,
           reason: 'physical_mismatch',
-          location: String(location).trim(),
+          location: selectedLocation,
+          locationId: storageLocation._id,
           status: 'approved',
           reportedBy: req.user._id,
           movementId: movementResult.movement._id,
@@ -428,7 +540,7 @@ export const getStockLocations = async (req, res, next) => {
 export const transferStockBetweenLocations = async (req, res, next) => {
   try {
     const {
-      itemId, quantity, fromLocation, toLocation, department, notes,
+      itemId, quantity, fromLocation, toLocation, fromLocationId, toLocationId, department, notes,
       transferMode, fromDepartment, toDepartment
     } = req.body;
     const result = await runInventoryTransaction((session) => transferStock({
@@ -439,6 +551,8 @@ export const transferStockBetweenLocations = async (req, res, next) => {
       unit: req.body.unit,
       fromLocation,
       toLocation,
+      fromLocationId,
+      toLocationId,
       department: department || '',
       transferMode: transferMode || 'location',
       fromDepartment: fromDepartment || '',
@@ -554,12 +668,14 @@ export const getStockAdjustments = async (req, res, next) => {
 export const createStockAdjustment = async (req, res, next) => {
   try {
     if (!adminOnly(req, res)) return;
-    const { itemId, quantity, reason, department, location, remarks } = req.body;
+    const { itemId, quantity, reason, department, location, locationId, remarks } = req.body;
     const amount = Number(quantity);
     const reasons = ['expired', 'damaged', 'food_wastage', 'spillage', 'missing', 'physical_mismatch', 'internal_usage'];
+    const departments = ['Kitchen', 'Restaurant', 'Production', 'Housekeeping', 'Maintenance', 'Minibar'];
     if (!mongoose.isValidObjectId(itemId) || !Number.isFinite(amount) || amount < 0
-      || (amount === 0 && reason !== 'physical_mismatch') || !reasons.includes(reason)) {
-      return res.status(400).json({ success: false, message: 'Provide a valid item, non-negative physical count or positive adjustment quantity, and supported reason.' });
+      || (amount === 0 && reason !== 'physical_mismatch') || !reasons.includes(reason)
+      || !departments.includes(department)) {
+      return res.status(400).json({ success: false, message: 'Provide a valid item, non-negative physical count or positive adjustment quantity, supported reason, and department.' });
     }
     const item = await InventoryItem.findOne({ _id: itemId, ...tenantFilter(req), isActive: true })
       .select('name unit baseUnit packagingOptions unitConversions');
@@ -567,6 +683,12 @@ export const createStockAdjustment = async (req, res, next) => {
     const unit = normalizeInventoryUnit(req.body.unit || item.baseUnit || item.unit);
     const converted = convertQuantityToBase(item, amount, unit);
     const result = await runInventoryTransaction(async (session) => {
+      const storageLocation = await resolveStorageLocation({
+        hotelId: req.hotelId,
+        locationId,
+        locationName: location || 'Main Store',
+        session
+      });
       const [adjustment] = await StockAdjustment.create([{
         ...tenantFilter(req),
         itemId,
@@ -576,7 +698,8 @@ export const createStockAdjustment = async (req, res, next) => {
         conversionFactor: converted.factor,
         reason,
         department: department || '',
-        location: location || 'Main Store',
+        location: storageLocation.locationName,
+        locationId: storageLocation._id,
         remarks: remarks || '',
         status: 'approved',
         reportedBy: req.user._id
@@ -598,7 +721,8 @@ export const createStockAdjustment = async (req, res, next) => {
         quantity: amount,
         unit: converted.unit,
         conversionFactor: converted.factor,
-        location: location || 'Main Store',
+        location: storageLocation.locationName,
+        locationId: storageLocation._id,
         department: department || '',
         referenceNumber: `ADJ-${adjustment._id}`,
         notes: `${reason}: ${remarks || ''}`.trim(),
@@ -700,6 +824,7 @@ export const assignMinibarStock = async (req, res, next) => {
           quantity,
           unit: line.unit || undefined,
           fromLocation: line.fromLocation || 'Minibar Store',
+          fromLocationId: line.fromLocationId,
           toLocation: roomLocation,
           department: 'Minibar',
           recordedBy: req.user._id,
@@ -1123,7 +1248,7 @@ export const getRecipes = async (req, res, next) => {
     const filter = tenantFilter(req);
     if (req.query.menuItemId) filter.menuItemId = req.query.menuItemId;
     const recipes = await InventoryRecipe.find(filter)
-      .populate('menuItemId', 'name price')
+      .populate('menuItemId', 'name price acPrice acPricingEnabled nonAcPrice nonAcPricingEnabled')
       .populate('ingredients.itemId', 'name code unit baseUnit unitCost purchasePrice purchaseConversionFactor')
       .populate('ingredients.substitutions.itemId', 'name code unit baseUnit')
       .sort({ menuItemId: 1, version: -1 })
@@ -1192,6 +1317,37 @@ export const getRecipes = async (req, res, next) => {
       const estimatedRecipeCost = totalCost !== null && validUsableYield
         ? roundMoney(totalCost / expectedUsableQuantity)
         : null;
+      const getDiningPrice = (enabled, value, fallback = null) => {
+        if (!enabled) return null;
+        const priceValue = value ?? fallback;
+        return priceValue !== null && priceValue !== undefined && priceValue !== ''
+          && Number.isFinite(Number(priceValue))
+          ? Number(priceValue)
+          : null;
+      };
+      const acSellingPrice = getDiningPrice(
+        recipe.menuItemId?.acPricingEnabled === true,
+        recipe.menuItemId?.acPrice
+      );
+      const nonAcSellingPrice = getDiningPrice(
+        recipe.menuItemId?.nonAcPricingEnabled !== false,
+        recipe.menuItemId?.nonAcPrice,
+        recipe.menuItemId?.price
+      );
+      const getDiningProfit = (diningSellingPrice) => ({
+        sellingPrice: diningSellingPrice,
+        estimatedGrossProfit: estimatedRecipeCost !== null && diningSellingPrice !== null
+          ? roundMoney(diningSellingPrice - estimatedRecipeCost)
+          : null,
+        estimatedProfitWhole: totalCost !== null && validUsableYield && diningSellingPrice !== null
+          ? roundMoney(diningSellingPrice * expectedUsableQuantity - totalCost)
+          : null,
+        foodCostPercent: estimatedRecipeCost !== null && diningSellingPrice > 0
+          ? Math.round((estimatedRecipeCost / diningSellingPrice) * 10000) / 100
+          : null
+      });
+      const acPricing = getDiningProfit(acSellingPrice);
+      const nonAcPricing = getDiningProfit(nonAcSellingPrice);
       const estimatedGrossProfit = estimatedRecipeCost !== null && sellingPrice !== null
         ? roundMoney(sellingPrice - estimatedRecipeCost)
         : null;
@@ -1206,6 +1362,10 @@ export const getRecipes = async (req, res, next) => {
         expectedPreparationLossQuantity,
         expectedUsableQuantity,
         costPending: ingredientCostPending,
+        diningTypePricing: {
+          ac: { enabled: recipe.menuItemId?.acPricingEnabled === true, ...acPricing },
+          nonAc: { enabled: recipe.menuItemId?.nonAcPricingEnabled !== false, ...nonAcPricing }
+        },
         estimatedGrossProfit,
         estimatedProfitWhole: totalCost !== null && validUsableYield && sellingPrice !== null
           ? roundMoney(sellingPrice * expectedUsableQuantity - totalCost)
@@ -1230,7 +1390,7 @@ export const saveRecipe = async (req, res, next) => {
       menuItemId, ingredients, recipeName = '', description = '',
       servingSize = '1 serving', preparationTimeMinutes = 0,
       productionMode = 'made_to_order', expectedProductionYield = 1,
-      expectedPreparationLossPercent = 0
+      expectedPreparationLossPercent = 0, locationId, location = 'Restaurant Store'
     } = req.body;
     if (!mongoose.isValidObjectId(menuItemId) || !Array.isArray(ingredients) || !ingredients.length) {
       return res.status(400).json({ success: false, message: 'Menu item and at least one ingredient are required.' });
@@ -1278,6 +1438,9 @@ export const saveRecipe = async (req, res, next) => {
       ingredient.baseUnit = ingredientItem.baseUnit || ingredientItem.unit;
     }
     const recipe = await runInventoryTransaction(async (session) => {
+      const storageLocation = await resolveStorageLocation({
+        hotelId: req.hotelId, locationId, locationName: location, session
+      });
       const previous = await InventoryRecipe.findOne({
         ...tenantFilter(req), menuItemId, isActive: true
       }).sort({ version: -1 }).session(session);
@@ -1289,6 +1452,8 @@ export const saveRecipe = async (req, res, next) => {
       const [created] = await InventoryRecipe.create([{
         ...tenantFilter(req),
         menuItemId,
+        locationId: storageLocation._id,
+        location: storageLocation.locationName,
         recipeName: String(recipeName).trim(),
         description: String(description).trim(),
         servingSize: String(servingSize).trim() || '1 serving',
@@ -1369,131 +1534,368 @@ export const getInventoryReport = async (req, res, next) => {
   try {
     const { type = 'stock', category, department, itemId, from, to } = req.query;
     const scope = tenantFilter(req);
-    const createdAt = dateFilter({ from, to });
     if (type === 'profit-loss') {
-      const recipeConsumptions = await RecipeConsumption.find({
-        ...scope,
-        status: 'deducted',
-        ...(createdAt ? { deductedAt: createdAt } : {})
-      }).select('orderId ingredients deductedAt').lean();
-      const orderIds = [...new Set(recipeConsumptions.map((entry) => String(entry.orderId)))];
-      const [orders, lossMovements, purchaseMovements] = await Promise.all([
+      const hotel = req.hotel || await Hotel.findById(req.hotelId).select('timezone');
+      const timeZone = hotel?.timezone || 'UTC';
+      const profitLossDateRange = hotelLocalDateFilter(from, to, timeZone);
+      const [orders, lossMovements, unrecordedMovements, preparedLossMovements, purchaseMovements] = await Promise.all([
         FoodOrder.find({
           ...scope,
-          _id: { $in: orderIds },
-          status: 'served',
-          paymentStatus: { $in: ['paid', 'transferred_to_folio'] }
-        }).select('orderNumber items subtotal discountAmount taxAmount totalAmount createdAt').lean(),
+          status: { $ne: 'cancelled' },
+          paymentStatus: { $in: ['paid', 'partially_paid', 'refunded'] },
+          ...(profitLossDateRange ? { createdAt: profitLossDateRange } : {})
+        }).select('orderNumber items subtotal discountAmount taxAmount totalAmount paidAmount refundedAmount createdAt paymentStatus diningType').lean(),
         StockMovement.find({
           ...scope,
           movementType: { $in: ['wastage', 'expiry'] },
-          ...(createdAt ? {
+          ...(profitLossDateRange ? {
             $or: [
-              { transactionDate: createdAt },
-              { transactionDate: { $exists: false }, createdAt }
+              { transactionDate: profitLossDateRange },
+              { transactionDate: { $exists: false }, createdAt: profitLossDateRange }
             ]
           } : {})
-        }).select('totalValue').lean(),
+        }).populate('itemId', 'name code unit baseUnit')
+          .select('itemId movementType totalValue quantity unitCost department sourceDepartment transactionDate createdAt referenceNumber notes metadata').lean(),
+        StockMovement.find({
+          ...scope,
+          movementType: 'issue',
+          'metadata.source': 'stock_verification_unrecorded_consumption',
+          ...(profitLossDateRange ? {
+            $or: [
+              { transactionDate: profitLossDateRange },
+              { transactionDate: { $exists: false }, createdAt: profitLossDateRange }
+            ]
+          } : {})
+        }).populate('itemId', 'name code unit baseUnit')
+          .select('itemId totalValue quantity unitCost department transactionDate createdAt referenceNumber notes metadata').lean(),
+        PreparedFoodMovement.find({
+          ...scope,
+          movementType: { $in: ['wastage', 'complimentary', 'unrecorded_consumption', 'staff_consumption'] },
+          ...(profitLossDateRange ? { createdAt: profitLossDateRange } : {})
+        }).populate('menuItemId', 'name')
+          .select('menuItemId productionBatchId movementType quantity unitCost totalCost reason notes location orderNumber createdAt').lean(),
         StockMovement.find({
           ...scope,
           movementType: 'receipt',
-          ...(createdAt ? {
+          ...(profitLossDateRange ? {
             $or: [
-              { transactionDate: createdAt },
-              { transactionDate: { $exists: false }, createdAt }
+              { transactionDate: profitLossDateRange },
+              { transactionDate: { $exists: false }, createdAt: profitLossDateRange }
             ]
           } : {})
         }).select('totalValue').lean()
       ]);
-      const orderById = new Map(orders.map((order) => [String(order._id), order]));
+      const orderIds = orders.map((order) => order._id);
+      const [recipeConsumptions, preparedSales] = orderIds.length
+        ? await Promise.all([
+          RecipeConsumption.find({
+            ...scope,
+            orderId: { $in: orderIds },
+            status: 'deducted'
+          }).select('orderId ingredients').lean(),
+          PreparedFoodMovement.find({
+            ...scope,
+            orderId: { $in: orderIds },
+            movementType: 'sale'
+          }).select('orderId menuItemId orderLineIndex quantity totalCost salesRevenue').lean()
+        ])
+        : [[], []];
+      const recipeCostByOrderMenu = new Map();
+      const preparedCostByOrderLine = new Map();
+      const preparedCostByOrderMenu = new Map();
       const menuItems = new Map();
       for (const consumption of recipeConsumptions) {
-        const order = orderById.get(String(consumption.orderId));
-        if (!order) continue;
-
-        const orderLines = new Map();
-        for (const line of order.items || []) {
-          const menuItemId = String(line.menuItemId);
-          const lineTotal = Number(line.amount ?? Number(line.quantity || 0) * Number(line.unitPrice || 0));
-          const entry = orderLines.get(menuItemId) || {
-            name: line.name || 'Menu item',
-            quantity: 0,
-            amount: 0
-          };
-          entry.quantity += Number(line.quantity) || 0;
-          entry.amount += Number.isFinite(lineTotal) ? lineTotal : 0;
-          orderLines.set(menuItemId, entry);
-        }
-
-        const recipeCosts = new Map();
         for (const ingredient of consumption.ingredients || []) {
           const menuItemId = String(ingredient.menuItemId);
-          const entry = recipeCosts.get(menuItemId) || {
-            name: ingredient.menuItemName || orderLines.get(menuItemId)?.name || 'Menu item',
-            cost: 0
-          };
-          entry.cost += Number(ingredient.totalCost) || 0;
-          recipeCosts.set(menuItemId, entry);
+          const orderMenuKey = `${String(consumption.orderId)}:${menuItemId}`;
+          recipeCostByOrderMenu.set(orderMenuKey,
+            (recipeCostByOrderMenu.get(orderMenuKey) || 0) + (Number(ingredient.totalCost) || 0));
         }
-
-        const subtotal = Number(order.subtotal) || 0;
-        const discount = Number(order.discountAmount) || 0;
-        for (const [menuItemId, recipeCost] of recipeCosts) {
-          const soldLine = orderLines.get(menuItemId);
-          const menu = menuItems.get(menuItemId) || {
-            menuItemId,
-            name: soldLine?.name || recipeCost.name,
-            quantitySold: 0,
-            salesRevenue: 0,
-            foodCost: 0
-          };
-          if (soldLine) {
-            const discountShare = subtotal > 0 ? discount * soldLine.amount / subtotal : 0;
-            menu.quantitySold += soldLine.quantity;
-            menu.salesRevenue += Math.max(0, soldLine.amount - discountShare);
-          }
-          menu.foodCost += recipeCost.cost;
-          menuItems.set(menuItemId, menu);
+      }
+      for (const movement of preparedSales) {
+        const orderId = String(movement.orderId);
+        const menuItemId = String(movement.menuItemId);
+        const orderMenuKey = `${orderId}:${menuItemId}`;
+        if (Number.isInteger(movement.orderLineIndex)) {
+          const key = `${orderId}:${movement.orderLineIndex}`;
+          preparedCostByOrderLine.set(key,
+            (preparedCostByOrderLine.get(key) || 0) + (Number(movement.totalCost) || 0));
+        } else {
+          preparedCostByOrderMenu.set(orderMenuKey,
+            (preparedCostByOrderMenu.get(orderMenuKey) || 0) + (Number(movement.totalCost) || 0));
         }
       }
 
+      let salesRevenue = 0;
+      let uncostedSalesRevenue = 0;
+      let settledOrderCount = 0;
+      let uncostedSalesCount = 0;
+      for (const order of orders) {
+        const totalAmount = Number(order.totalAmount) || 0;
+        const paidAmount = Number(order.paidAmount)
+          || (['paid', 'refunded'].includes(order.paymentStatus) ? totalAmount : 0);
+        const refundedAmount = Math.min(totalAmount, Number(order.refundedAmount)
+          || (order.paymentStatus === 'refunded' ? totalAmount : 0));
+        const paidRatio = totalAmount > 0
+          ? Math.min(1, Math.max(0, paidAmount - refundedAmount) / totalAmount)
+          : 0;
+        if (paidRatio <= 0) continue;
+        settledOrderCount += 1;
+
+        const lines = order.items || [];
+        const lineAmounts = lines.map((line) => Number(line.amount ?? (
+          (Number(line.quantity) || 0) * (Number(line.unitPriceSnapshot ?? line.unitPrice) || 0)
+        )));
+        const orderSubtotal = Number(order.subtotal) || lineAmounts.reduce((sum, amount) => sum + amount, 0);
+        const discount = Number(order.discountAmount) || 0;
+        const lineQuantitiesByMenu = new Map();
+        lines.forEach((line) => {
+          const key = String(line.menuItemId);
+          lineQuantitiesByMenu.set(key, (lineQuantitiesByMenu.get(key) || 0) + (Number(line.quantity) || 0));
+        });
+
+        lines.forEach((line, lineIndex) => {
+          const menuItemId = String(line.menuItemId);
+          const orderMenuKey = `${String(order._id)}:${menuItemId}`;
+          const lineAmount = lineAmounts[lineIndex];
+          const discountShare = orderSubtotal > 0 ? discount * lineAmount / orderSubtotal : 0;
+          const paidLineRevenue = Math.max(0, lineAmount - discountShare) * paidRatio;
+          const menuItemQuantity = lineQuantitiesByMenu.get(menuItemId) || 0;
+          const preparedLineCost = preparedCostByOrderLine.get(`${String(order._id)}:${lineIndex}`);
+          const preparedMenuCost = preparedCostByOrderMenu.get(orderMenuKey);
+          const recipeCost = recipeCostByOrderMenu.get(orderMenuKey);
+          const lineCost = preparedLineCost !== undefined
+            ? preparedLineCost
+            : preparedMenuCost !== undefined
+              ? preparedMenuCost * ((Number(line.quantity) || 0) / menuItemQuantity)
+              : recipeCost !== undefined
+                ? recipeCost * ((Number(line.quantity) || 0) / menuItemQuantity)
+                : null;
+          const menu = menuItems.get(menuItemId) || {
+            menuItemId,
+            name: line.name || 'Menu item',
+            quantitySold: 0,
+            salesRevenue: 0,
+            foodCost: 0,
+            hasCost: true,
+            acQuantitySold: 0,
+            nonAcQuantitySold: 0
+          };
+          menu.quantitySold += (Number(line.quantity) || 0) * paidRatio;
+          menu.salesRevenue += paidLineRevenue;
+          if (line.diningType === 'ac' || order.diningType === 'ac') menu.acQuantitySold += (Number(line.quantity) || 0) * paidRatio;
+          else menu.nonAcQuantitySold += (Number(line.quantity) || 0) * paidRatio;
+          if (lineCost === null) {
+            menu.hasCost = false;
+            uncostedSalesRevenue += paidLineRevenue;
+            if ((Number(line.quantity) || 0) * paidRatio > 0) uncostedSalesCount += 1;
+          } else {
+            menu.foodCost += lineCost * paidRatio;
+          }
+          salesRevenue += paidLineRevenue;
+          menuItems.set(menuItemId, menu);
+        });
+      }
+
       const menuItemBreakdown = [...menuItems.values()].map((item) => {
-        const grossProfit = Math.round((item.salesRevenue - item.foodCost) * 100) / 100;
+        const grossProfit = item.hasCost
+          ? Math.round((item.salesRevenue - item.foodCost) * 100) / 100
+          : null;
         return {
           ...item,
           salesRevenue: Math.round(item.salesRevenue * 100) / 100,
-          foodCost: Math.round(item.foodCost * 100) / 100,
+          foodCost: item.hasCost ? Math.round(item.foodCost * 100) / 100 : null,
+          recordedFoodCost: Math.round(item.foodCost * 100) / 100,
+          costStatus: item.hasCost ? 'complete' : 'missing',
           grossProfit,
-          grossMarginPercent: item.salesRevenue > 0
+          grossMarginPercent: item.hasCost && item.salesRevenue > 0
             ? Math.round((grossProfit / item.salesRevenue) * 10000) / 100
             : null
         };
       }).sort((left, right) => right.salesRevenue - left.salesRevenue);
-      const salesRevenue = menuItemBreakdown.reduce((sum, item) => sum + item.salesRevenue, 0);
-      const costOfGoodsSold = menuItemBreakdown.reduce((sum, item) => sum + item.foodCost, 0);
-      const grossProfit = salesRevenue - costOfGoodsSold;
-      const inventoryLoss = lossMovements.reduce((sum, movement) => sum + movement.totalValue, 0);
-      const netProfit = grossProfit - inventoryLoss;
+      const costOfGoodsSold = menuItemBreakdown.reduce((sum, item) => sum + item.recordedFoodCost, 0);
+      const costedSalesRevenue = Math.max(0, salesRevenue - uncostedSalesRevenue);
+      const grossProfit = uncostedSalesCount > 0 ? null : salesRevenue - costOfGoodsSold;
+      const round = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+      const stockWastageBreakdown = lossMovements.map((movement) => ({
+        itemName: movement.itemId?.name || 'Inventory item',
+        code: movement.itemId?.code || '',
+        quantity: Number(movement.quantity) || 0,
+        unit: movement.itemId?.baseUnit || movement.itemId?.unit || '',
+        cost: Number(movement.totalValue) || 0,
+        movementType: movement.movementType,
+        department: movement.department || movement.sourceDepartment || '',
+        date: movement.transactionDate || movement.createdAt,
+        reference: movement.referenceNumber || '',
+        reason: movement.notes || movement.metadata?.reason || ''
+      }));
+      const unrecordedConsumption = unrecordedMovements.map((movement) => ({
+        itemName: movement.itemId?.name || 'Inventory item',
+        code: movement.itemId?.code || '',
+        quantity: Number(movement.quantity) || 0,
+        unit: movement.itemId?.baseUnit || movement.itemId?.unit || '',
+        cost: Number(movement.totalValue) || 0,
+        department: movement.department || '',
+        date: movement.transactionDate || movement.createdAt,
+        reference: movement.referenceNumber || '',
+        reason: movement.notes || ''
+      }));
+      const stockWastageCost = lossMovements.reduce((sum, movement) => sum + (Number(movement.totalValue) || 0), 0);
+      const unrecordedConsumptionCost = unrecordedMovements.reduce((sum, movement) => sum + (Number(movement.totalValue) || 0), 0);
+      const preparedWastageBreakdown = preparedLossMovements
+        .filter((movement) => movement.movementType === 'wastage')
+        .map((movement) => ({
+        itemName: movement.menuItemId?.name || 'Prepared food',
+        quantity: Number(movement.quantity) || 0,
+        unit: 'portion',
+        cost: Number(movement.totalCost) || 0,
+        movementType: movement.movementType,
+        date: movement.createdAt,
+        location: movement.location || '',
+        reference: movement.orderNumber || '',
+        reason: movement.reason || movement.notes || ''
+        }));
+      const preparedWastageCost = preparedLossMovements
+        .filter((movement) => movement.movementType === 'wastage')
+        .reduce((sum, movement) => sum + (Number(movement.totalCost) || 0), 0);
+      const complimentaryBreakdown = preparedLossMovements
+        .filter((movement) => movement.movementType === 'complimentary')
+        .map((movement) => ({
+          itemName: movement.menuItemId?.name || 'Prepared food',
+          quantity: Number(movement.quantity) || 0,
+          unit: 'portion',
+          cost: Number(movement.totalCost) || 0,
+          date: movement.createdAt,
+          location: movement.location || '',
+          reason: movement.reason || movement.notes || ''
+        }));
+      const unrecordedFoodBreakdown = preparedLossMovements
+        .filter((movement) => movement.movementType === 'unrecorded_consumption')
+        .map((movement) => ({
+          itemName: movement.menuItemId?.name || 'Prepared food',
+          quantity: Number(movement.quantity) || 0,
+          unit: 'portion',
+          cost: Number(movement.totalCost) || 0,
+          date: movement.createdAt,
+          location: movement.location || '',
+          reference: movement.orderNumber || '',
+          reason: movement.reason || movement.notes || ''
+        }));
+      const staffConsumptionBreakdown = preparedLossMovements
+        .filter((movement) => movement.movementType === 'staff_consumption')
+        .map((movement) => ({
+          itemName: movement.menuItemId?.name || 'Prepared food',
+          quantity: Number(movement.quantity) || 0,
+          unit: 'portion',
+          cost: Number(movement.totalCost) || 0,
+          date: movement.createdAt,
+          location: movement.location || '',
+          reason: movement.reason || movement.notes || ''
+        }));
+      const complimentaryCost = complimentaryBreakdown.reduce((sum, entry) => sum + entry.cost, 0);
+      const unrecordedFoodCost = unrecordedFoodBreakdown.reduce((sum, entry) => sum + entry.cost, 0);
+      const staffConsumptionCost = staffConsumptionBreakdown.reduce((sum, entry) => sum + entry.cost, 0);
+      const inventoryLoss = stockWastageCost + unrecordedConsumptionCost
+        + preparedWastageCost + complimentaryCost + unrecordedFoodCost + staffConsumptionCost;
+      const preparedFoodMovementTypes = ['complimentary', 'unrecorded_consumption'];
+      const preparedFoodBatches = await ProductionBatch.find({
+        ...scope,
+        _id: {
+          $in: preparedLossMovements
+            .filter((movement) => preparedFoodMovementTypes.includes(movement.movementType))
+            .map((movement) => movement.productionBatchId)
+        }
+      }).select('_id batchNumber acceptedQuantity ingredients').lean();
+      const preparedFoodBatchById = new Map(preparedFoodBatches.map((batch) => [String(batch._id), batch]));
+      const allocatePreparedFoodRawMaterials = (movementType) => {
+        const materialMap = new Map();
+        for (const movement of preparedLossMovements.filter((entry) => entry.movementType === movementType)) {
+          const batch = preparedFoodBatchById.get(String(movement.productionBatchId));
+          if (!batch || Number(batch.acceptedQuantity) <= 0) continue;
+          const portionRatio = (Number(movement.quantity) || 0) / Number(batch.acceptedQuantity);
+          for (const ingredient of batch.ingredients || []) {
+            const itemId = String(ingredient.itemId);
+            const key = `${String(movement._id)}:${itemId}`;
+            const entry = materialMap.get(key) || {
+              itemId,
+              itemName: ingredient.itemName || 'Raw material',
+              menuItemName: movement.menuItemId?.name || 'Prepared food',
+              quantity: 0,
+              unit: ingredient.unit || '',
+              cost: 0,
+              date: movement.createdAt,
+              location: movement.location || '',
+              reference: batch.batchNumber || '',
+              reason: movement.reason || movement.notes || ''
+            };
+            entry.quantity += (Number(ingredient.actualQuantity) || 0) * portionRatio;
+            entry.cost += (Number(ingredient.totalCost) || 0) * portionRatio;
+            materialMap.set(key, entry);
+          }
+        }
+        return [...materialMap.values()].map((entry) => ({
+          ...entry,
+          quantity: round(entry.quantity),
+          cost: round(entry.cost)
+        }));
+      };
+      const complimentaryRawMaterialBreakdown = allocatePreparedFoodRawMaterials('complimentary');
+      const unrecordedFoodRawMaterialBreakdown = allocatePreparedFoodRawMaterials('unrecorded_consumption');
+      const netProfit = grossProfit === null ? null : grossProfit - inventoryLoss;
       const rounded = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
+      const roundedOrNull = (value) => value === null ? null : rounded(value);
+      const topSellingItems = [...menuItemBreakdown].sort((left, right) => right.quantitySold - left.quantitySold).slice(0, 10);
+      const topProfitItems = [...menuItemBreakdown]
+        .filter((item) => item.grossProfit !== null)
+        .sort((left, right) => right.grossProfit - left.grossProfit)
+        .slice(0, 10);
       return res.json({
         success: true,
         data: [{
           salesRevenue: rounded(salesRevenue),
+          costedSalesRevenue: rounded(costedSalesRevenue),
+          uncostedSalesRevenue: rounded(uncostedSalesRevenue),
+          uncostedSalesCount,
           costOfGoodsSold: rounded(costOfGoodsSold),
-          grossProfit: rounded(grossProfit),
-          grossMarginPercent: salesRevenue > 0 ? rounded((grossProfit / salesRevenue) * 100) : null,
+          grossProfit: roundedOrNull(grossProfit),
+          grossMarginPercent: grossProfit !== null && salesRevenue > 0
+            ? rounded((grossProfit / salesRevenue) * 100)
+            : null,
           inventoryLoss: rounded(inventoryLoss),
           totalInventoryExpenses: rounded(costOfGoodsSold + inventoryLoss),
-          netProfit: rounded(netProfit),
-          netMarginPercent: salesRevenue > 0 ? rounded((netProfit / salesRevenue) * 100) : null,
+          netProfit: roundedOrNull(netProfit),
+          netMarginPercent: netProfit !== null && salesRevenue > 0
+            ? rounded((netProfit / salesRevenue) * 100)
+            : null,
+          stockWastageCost: rounded(stockWastageCost),
+          unrecordedConsumptionCost: rounded(unrecordedConsumptionCost),
+          unrecordedFoodQuantity: round(unrecordedFoodBreakdown.reduce((sum, entry) => sum + entry.quantity, 0)),
+          unrecordedFoodCost: rounded(unrecordedFoodCost),
+          preparedWastageCost: rounded(preparedWastageCost),
+          complimentaryQuantity: round(complimentaryBreakdown.reduce((sum, entry) => sum + entry.quantity, 0)),
+          complimentaryCost: rounded(complimentaryCost),
+          staffConsumptionQuantity: round(staffConsumptionBreakdown.reduce((sum, entry) => sum + entry.quantity, 0)),
+          staffConsumptionCost: rounded(staffConsumptionCost),
+          stockWastageBreakdown,
+          preparedWastageBreakdown,
+          unrecordedConsumption,
+          complimentaryBreakdown,
+          complimentaryRawMaterialBreakdown,
+          unrecordedFoodBreakdown,
+          unrecordedFoodRawMaterialBreakdown,
+          staffConsumptionBreakdown,
           stockPurchasesNotExpensed: rounded(
             purchaseMovements.reduce((sum, movement) => sum + movement.totalValue, 0)
           ),
-          settledOrderCount: orders.length,
-          menuItemBreakdown
+          period: { from: from || null, to: to || null, timeZone },
+          settledOrderCount,
+          menuItemBreakdown,
+          topSellingItems,
+          topProfitItems
         }]
       });
     }
+    const createdAt = dateFilter({ from, to });
     if (type === 'financial') {
       const itemFilter = {
         ...scope,
@@ -1693,26 +2095,110 @@ export const getInventoryReport = async (req, res, next) => {
       });
     }
     if (type === 'stock' || type === 'valuation') {
-      const filter = { ...scope, ...(category && category !== 'all' ? { category } : {}) };
+      const filter = {
+        ...scope,
+        ...(category && category !== 'all' ? { category } : {}),
+        ...(itemId ? { _id: itemId } : {})
+      };
       const items = await InventoryItem.find(filter).populate('vendorId', 'name').sort({ name: 1 }).lean();
       const expiredBatches = await InventoryBatch.aggregate([
         { $match: { ...scope, itemId: { $in: items.map((item) => item._id) }, expiryDate: { $lte: new Date() }, remainingQuantity: { $gt: 0 } } },
         { $group: { _id: '$itemId', quantity: { $sum: '$remainingQuantity' } } }
       ]);
       const expired = new Map(expiredBatches.map((batch) => [String(batch._id), batch.quantity]));
-      const data = items.map((item) => ({
-        ...item,
-        availableStock: Math.max(0, item.currentStock - (expired.get(String(item._id)) || 0)),
-        ...(type === 'valuation' ? { stockValue: item.currentStock * item.unitCost } : {})
-      }));
+      const batchValues = type === 'valuation'
+        ? await InventoryBatch.aggregate([
+          { $match: { ...scope, itemId: { $in: items.map((item) => item._id) }, remainingQuantity: { $gt: 0 } } },
+          { $group: {
+            _id: '$itemId',
+            quantity: { $sum: '$remainingQuantity' },
+            value: { $sum: { $multiply: ['$remainingQuantity', '$unitCost'] } }
+          } }
+        ])
+        : [];
+      const valueByItem = new Map(batchValues.map((batch) => [String(batch._id), batch]));
+      const data = items.map((item) => {
+        const row = {
+          ...item,
+          availableStock: Math.max(0, item.currentStock - (expired.get(String(item._id)) || 0))
+        };
+        if (type === 'valuation') {
+          const batch = valueByItem.get(String(item._id));
+          const unbatchedQuantity = Math.max(0, item.currentStock - (batch?.quantity || 0));
+          row.stockValue = (batch?.value || 0) + unbatchedQuantity * item.unitCost;
+        }
+        return row;
+      });
       return res.json({
         success: true,
         data
       });
     }
     if (type === 'purchases') {
-      const filter = { ...scope, ...(createdAt ? { createdAt } : {}) };
-      const data = await PurchaseOrder.find(filter).populate('vendorId', 'name').sort({ createdAt: -1 }).lean();
+      const [receipts, legacyPurchaseOrders] = await Promise.all([
+        GoodsReceipt.find({
+          ...scope,
+          ...(createdAt ? { receivedAt: createdAt } : {}),
+          ...(itemId ? { 'lines.itemId': itemId } : {})
+        })
+          .populate({ path: 'purchaseOrderId', populate: { path: 'vendorId', select: 'name' } })
+          .populate('lines.itemId', 'name code unit baseUnit')
+          .sort({ receivedAt: -1 })
+          .lean(),
+        PurchaseOrder.find({
+          ...scope,
+          status: { $in: ['received', 'partially_received'] },
+          ...(createdAt ? {
+            $or: [
+              { receivedDate: createdAt },
+              { receivedDate: { $exists: false }, updatedAt: createdAt }
+            ]
+          } : {}),
+          ...(itemId ? { 'items.itemId': itemId } : {})
+        })
+          .populate('vendorId', 'name')
+          .populate('items.itemId', 'name code unit baseUnit')
+          .sort({ receivedDate: -1, updatedAt: -1 })
+          .lean()
+      ]);
+      const historicalReceiptOrderIds = legacyPurchaseOrders.length
+        ? await GoodsReceipt.distinct('purchaseOrderId', {
+          ...scope,
+          purchaseOrderId: { $in: legacyPurchaseOrders.map((purchaseOrder) => purchaseOrder._id) }
+        })
+        : [];
+      const receiptPurchaseOrderIds = new Set([
+        ...receipts.map((receipt) => String(receipt.purchaseOrderId?._id || receipt.purchaseOrderId)),
+        ...historicalReceiptOrderIds.map(String)
+      ]);
+      const legacyReceipts = legacyPurchaseOrders
+        .filter((purchaseOrder) => !receiptPurchaseOrderIds.has(String(purchaseOrder._id)))
+        .map((purchaseOrder) => ({
+          _id: `legacy-${purchaseOrder._id}`,
+          receiptNumber: '',
+          receivedAt: purchaseOrder.receivedDate || purchaseOrder.updatedAt || purchaseOrder.createdAt,
+          purchaseOrderId: purchaseOrder,
+          lines: (purchaseOrder.items || [])
+            .filter((line) => !itemId || String(line.itemId?._id || line.itemId) === String(itemId))
+            .map((line) => ({
+              itemId: line.itemId,
+              receivedQuantity: Number(line.receivedQuantity) > 0
+                ? Number(line.receivedQuantity)
+                : purchaseOrder.status === 'received' ? Number(line.quantity) || 0 : 0,
+              acceptedQuantity: Number(line.receivedQuantity) > 0
+                ? Number(line.receivedQuantity)
+                : purchaseOrder.status === 'received' ? Number(line.quantity) || 0 : 0,
+              unit: line.unit || '',
+              baseUnit: line.baseUnit || '',
+              unitCost: Number(line.unitCost) || 0,
+              taxInclusiveUnitCost: Number(line.unitCost) || 0,
+              purchaseTaxAmount: 0
+            }))
+            .filter((line) => line.acceptedQuantity > 0)
+        }))
+        .filter((receipt) => receipt.lines.length > 0);
+      const data = [...receipts, ...legacyReceipts]
+        .sort((left, right) => new Date(right.receivedAt || 0) - new Date(left.receivedAt || 0));
       return res.json({ success: true, data });
     }
     if (type === 'recipe-consumption') {

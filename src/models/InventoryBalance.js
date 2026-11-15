@@ -5,6 +5,7 @@ const inventoryBalanceSchema = new mongoose.Schema({
   propertyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Property', required: true, index: true },
   itemId: { type: mongoose.Schema.Types.ObjectId, ref: 'InventoryItem', required: true, index: true },
   location: { type: String, required: true, trim: true, default: 'Main Store' },
+  locationId: { type: mongoose.Schema.Types.ObjectId, ref: 'StorageLocation', default: null, index: true },
   quantity: { type: Number, required: true, min: 0, default: 0 }
 }, { timestamps: true });
 
