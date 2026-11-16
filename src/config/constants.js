@@ -3,10 +3,43 @@ export const ROLES = {
   HOTEL_ADMIN: 'hotel_admin',
   RECEPTIONIST: 'receptionist',
   RESTAURANT_STAFF: 'restaurant_staff',
+  RESTAURANT_MANAGER: 'restaurant_manager',
+  CASHIER: 'cashier',
+  WAITER: 'waiter',
+  HEAD_CHEF: 'head_chef',
+  SOUS_CHEF: 'sous_chef',
+  COOK: 'cook',
   HOUSEKEEPING_STAFF: 'housekeeping_staff',
+  RESTAURANT_RECEPTIONIST: 'restaurant_receptionist',
+  PURCHASE_MANAGER: 'purchase_manager',
+  ACCOUNTANT: 'accountant',
+  STOREKEEPER: 'storekeeper',
+  STEWARD: 'steward',
   MAINTENANCE_STAFF: 'maintenance_staff',
   GUEST: 'guest'
 };
+
+export const RESTAURANT_STAFF_ROLES = [
+  ROLES.RESTAURANT_MANAGER,
+  ROLES.CASHIER,
+  ROLES.WAITER,
+  ROLES.HEAD_CHEF,
+  ROLES.SOUS_CHEF,
+  ROLES.COOK,
+  ROLES.STOREKEEPER,
+  ROLES.STEWARD,
+  ROLES.PURCHASE_MANAGER,
+  ROLES.ACCOUNTANT,
+  ROLES.RESTAURANT_RECEPTIONIST,
+  ROLES.RESTAURANT_STAFF
+];
+
+export const HOTEL_STAFF_ROLES = [
+  ROLES.RECEPTIONIST,
+  ...RESTAURANT_STAFF_ROLES,
+  ROLES.HOUSEKEEPING_STAFF,
+  ROLES.MAINTENANCE_STAFF
+];
 
 export const HOTEL_STATUS = {
   PENDING_APPROVAL: 'pending_approval',

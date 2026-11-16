@@ -1418,6 +1418,9 @@ export const createVendor = async (req, res, next) => {
     if (!Array.isArray(suppliedItems)) {
       return res.status(400).json({ success: false, message: 'Supplied items must be a list.' });
     }
+    if (taxNumber && await Vendor.exists({ hotelId: req.hotelId, taxNumber: String(taxNumber).trim() })) {
+      return res.status(409).json({ success: false, message: 'A supplier with this GSTIN is already registered.' });
+    }
     if (suppliedItems.length) {
       const count = await InventoryItem.countDocuments({
         _id: { $in: suppliedItems }, hotelId: req.hotelId, propertyId: req.propertyId
@@ -1434,6 +1437,15 @@ export const createVendor = async (req, res, next) => {
       address,
       taxNumber,
       paymentTerms,
+      panNumber: String(req.body.panNumber || '').trim(),
+      state: String(req.body.state || '').trim(),
+      stateCode: String(req.body.stateCode || '').trim(),
+      supplierCategory: String(req.body.supplierCategory || '').trim(),
+      creditPeriodDays: Number(req.body.creditPeriodDays || 30),
+      openingBalance: Number(req.body.openingBalance || 0),
+      outstandingBalance: Number(req.body.openingBalance || 0),
+      bankDetails: req.body.bankDetails || {},
+      supplierCode: generateReference('SUP'),
       suppliedItems,
       hotelId: req.hotelId
     });
@@ -1447,13 +1459,24 @@ export const updateVendor = async (req, res, next) => {
   try {
     const allowedFields = [
       'name', 'contactPerson', 'email', 'phone', 'address', 'taxNumber',
-      'paymentTerms', 'status', 'suppliedItems'
+      'paymentTerms', 'status', 'suppliedItems', 'panNumber', 'state', 'stateCode',
+      'supplierCategory', 'creditPeriodDays', 'bankDetails'
     ];
     const updates = Object.fromEntries(
       Object.entries(req.body).filter(([field]) => allowedFields.includes(field))
     );
     if (req.body.gstNumber !== undefined && updates.taxNumber === undefined) {
       updates.taxNumber = req.body.gstNumber;
+    }
+    if (updates.taxNumber) {
+      const duplicate = await Vendor.exists({
+        hotelId: req.hotelId, taxNumber: String(updates.taxNumber).trim(), _id: { $ne: req.params.id }
+      });
+      if (duplicate) return res.status(409).json({ success: false, message: 'A supplier with this GSTIN is already registered.' });
+    }
+    if (updates.creditPeriodDays !== undefined
+      && (!Number.isInteger(Number(updates.creditPeriodDays)) || Number(updates.creditPeriodDays) < 0)) {
+      return res.status(400).json({ success: false, message: 'Supplier credit period must be a non-negative whole number of days.' });
     }
     if (updates.suppliedItems) {
       if (!Array.isArray(updates.suppliedItems)) {
@@ -1796,6 +1819,7 @@ export const receivePurchaseOrder = async (req, res, next) => {
     }
 
     const key = req.body.idempotencyKey || req.get('Idempotency-Key');
+    const inspectionRequired = req.body.requireInspection === true;
     const receipt = await runInventoryTransaction(async (session) => {
       if (key) {
         const duplicate = await GoodsReceipt.findOne({
@@ -1823,13 +1847,16 @@ export const receivePurchaseOrder = async (req, res, next) => {
         const input = (req.body.items || []).find((line) => String(line.itemId) === String(poLine.itemId));
         const remaining = Math.max(0, poLine.quantity - (poLine.receivedQuantity || 0));
         const receivedQuantity = input ? Number(input.receivedQuantity) : (req.body.items ? 0 : remaining);
-        const acceptedQuantity = input ? Number(input.acceptedQuantity ?? receivedQuantity) : receivedQuantity;
-        const damagedQuantity = input ? Number(input.damagedQuantity || 0) : 0;
-        const rejectedQuantity = input ? Number(input.rejectedQuantity || 0) : 0;
+        const receivedAcceptedQuantity = input ? Number(input.acceptedQuantity ?? receivedQuantity) : receivedQuantity;
+        const acceptedQuantity = inspectionRequired ? 0 : receivedAcceptedQuantity;
+        const damagedQuantity = inspectionRequired ? 0 : input ? Number(input.damagedQuantity || 0) : 0;
+        const rejectedQuantity = inspectionRequired ? 0 : input ? Number(input.rejectedQuantity || 0) : 0;
+        const inspectionPendingQuantity = inspectionRequired ? receivedQuantity : 0;
         if (![receivedQuantity, acceptedQuantity, damagedQuantity, rejectedQuantity].every(Number.isFinite)
           || receivedQuantity < 0 || receivedQuantity > remaining
+          || receivedAcceptedQuantity < 0 || receivedAcceptedQuantity > receivedQuantity
           || acceptedQuantity < 0 || damagedQuantity < 0 || rejectedQuantity < 0
-          || acceptedQuantity + damagedQuantity + rejectedQuantity > receivedQuantity) {
+          || acceptedQuantity + damagedQuantity + rejectedQuantity + inspectionPendingQuantity > receivedQuantity) {
           throw Object.assign(new Error(`Invalid received quantities for ${poLine.itemName}.`), { statusCode: 400 });
         }
         if (receivedQuantity === 0) continue;
@@ -1863,6 +1890,7 @@ export const receivePurchaseOrder = async (req, res, next) => {
           acceptedQuantity,
           damagedQuantity,
           rejectedQuantity,
+          inspectionPendingQuantity,
           batchNumber,
           expiryDate,
           unitCost: poLine.unitCost,
@@ -1923,7 +1951,10 @@ export const receivePurchaseOrder = async (req, res, next) => {
         purchaseTaxAmount: lines.reduce((sum, line) => sum + Number(line.purchaseTaxAmount || 0), 0),
         receivedBy: req.user._id,
         receivedAt: purchaseDate,
-        notes: req.body.notes || ''
+        notes: req.body.notes || '',
+        inspectionStatus: inspectionRequired ? 'pending' : 'not_required',
+        supplierChallanNumber: String(req.body.supplierChallanNumber || '').trim(),
+        vehicleNumber: String(req.body.vehicleNumber || '').trim()
       }], { session });
       const receivedSubtotal = lines.reduce(
         (sum, line) => sum + line.acceptedQuantity * line.unitCost,
@@ -1933,7 +1964,7 @@ export const receivePurchaseOrder = async (req, res, next) => {
       const payableAmount = purchaseSubtotal > 0
         ? receivedSubtotal + taxAndDiscount * (receivedSubtotal / purchaseSubtotal)
         : receivedSubtotal;
-      if (payableAmount > 0) {
+      if (payableAmount > 0 && !inspectionRequired) {
         await Vendor.updateOne(
           { _id: currentPO.vendorId, hotelId: req.hotelId },
           { $inc: { outstandingBalance: Math.round(payableAmount * 100) / 100 } },
@@ -1964,7 +1995,9 @@ export const receivePurchaseOrder = async (req, res, next) => {
 
     res.json({
       success: true,
-      message: 'Goods receipt recorded; accepted quantities were added to stock.',
+      message: inspectionRequired
+        ? 'Goods receipt recorded and held for quality inspection; no stock was added yet.'
+        : 'Goods receipt recorded; accepted quantities were added to stock.',
       data: receipt
     });
   } catch (err) {

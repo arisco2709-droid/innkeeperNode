@@ -4,7 +4,7 @@ import {
   SalaryRecord, Expense, LeaveRequest, SalaryAdvance, Hotel
 } from '../models/index.js';
 import { getLeaveAttendanceForDate } from './leaveController.js';
-import { ROLES } from '../config/constants.js';
+import { HOTEL_STAFF_ROLES, ROLES } from '../config/constants.js';
 import { generateReference } from '../utils/reference.js';
 import { logAudit } from '../services/auditService.js';
 import { notifyHotelOperations } from '../services/notificationService.js';
@@ -83,12 +83,7 @@ export const getStaff = async (req, res, next) => {
 
 export const getStaffAssignees = async (req, res, next) => {
   try {
-    const allowedRoles = [
-      ROLES.RECEPTIONIST,
-      ROLES.RESTAURANT_STAFF,
-      ROLES.HOUSEKEEPING_STAFF,
-      ROLES.MAINTENANCE_STAFF
-    ];
+    const allowedRoles = HOTEL_STAFF_ROLES;
     const requestedRoles = String(req.query.roles || '')
       .split(',')
       .map((role) => role.trim())

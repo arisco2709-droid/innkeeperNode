@@ -75,6 +75,13 @@ const purchaseOrderSchema = new mongoose.Schema({
     index: true
   },
   expectedDeliveryDate: Date,
+  deliveryLocationId: { type: mongoose.Schema.Types.ObjectId, ref: 'StorageLocation', default: null },
+  deliveryLocation: { type: String, trim: true, default: '' },
+  paymentTermsSnapshot: { type: String, trim: true, default: '' },
+  deliveryInstructions: { type: String, trim: true, default: '' },
+  cancellationReason: { type: String, trim: true, default: '' },
+  cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  cancelledAt: Date,
   department: { type: String, trim: true, default: '' },
   purchaseRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'DepartmentRequest', default: null },
   taxAmount: { type: Number, min: 0, default: 0 },

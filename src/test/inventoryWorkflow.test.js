@@ -1105,6 +1105,87 @@ describe('raw material inventory workflow', () => {
     });
   });
 
+  it('classifies direct complimentary and unrecorded usage without counting ingredient costs twice', async () => {
+    const isolatedHotelId = new mongoose.Types.ObjectId();
+    const isolatedPropertyId = new mongoose.Types.ObjectId();
+    const item = await InventoryItem.create({
+      hotelId: isolatedHotelId,
+      propertyId: isolatedPropertyId,
+      name: `Direct usage material ${new mongoose.Types.ObjectId()}`,
+      code: new mongoose.Types.ObjectId().toString().slice(-8),
+      inventoryType: 'raw_material',
+      unit: 'kg',
+      baseUnit: 'kg',
+      currentStock: 0,
+      unitCost: 3
+    });
+    const transactionDate = new Date('2025-03-15T12:00:00.000Z');
+    const addDirectMovement = (usageType, targetType, usageId, targetName, targetQuantity, quantity, totalValue) => ({
+      hotelId: isolatedHotelId,
+      propertyId: isolatedPropertyId,
+      itemId: item._id,
+      movementType: 'issue',
+      transactionDate,
+      quantity,
+      previousStock: 20,
+      newStock: 20 - quantity,
+      unitCost: totalValue / quantity,
+      totalValue,
+      location: 'Kitchen',
+      metadata: {
+        source: usageType === 'complimentary' ? 'manual_complimentary_usage' : 'manual_unrecorded_usage',
+        directUsage: {
+          usageId,
+          usageType,
+          targetType,
+          targetId: new mongoose.Types.ObjectId().toString(),
+          targetName,
+          targetQuantity,
+          targetUnit: targetType === 'menu_item' ? 'portion' : 'kg',
+          reason: 'Recorded for service test'
+        }
+      }
+    });
+    await StockMovement.create([
+      addDirectMovement('complimentary', 'raw_material', 'complimentary-raw', item.name, 2, 2, 6),
+      addDirectMovement('complimentary', 'menu_item', 'complimentary-menu', 'Made-to-order dish', 1, 2, 6),
+      addDirectMovement('unrecorded_consumption', 'raw_material', 'unrecorded-raw', item.name, 1, 1, 4),
+      addDirectMovement('unrecorded_consumption', 'menu_item', 'unrecorded-menu', 'Made-to-order dish', 1, 1, 5)
+    ]);
+
+    const response = await invoke(getInventoryReport, {
+      ...requestFor({}),
+      hotelId: isolatedHotelId,
+      propertyId: isolatedPropertyId,
+      hotel: { timezone: 'Asia/Kolkata' },
+      query: {
+        type: 'profit-loss',
+        from: '2025-03-15',
+        to: '2025-03-15'
+      }
+    });
+
+    expect(response.body.data[0]).toMatchObject({
+      complimentaryCost: 12,
+      complimentaryQuantity: 1,
+      unrecordedConsumptionCost: 4,
+      unrecordedFoodCost: 5,
+      unrecordedFoodQuantity: 1,
+      inventoryLoss: 21,
+      netProfit: -21
+    });
+    expect(response.body.data[0].complimentaryBreakdown).toHaveLength(2);
+    expect(response.body.data[0].complimentaryRawMaterialBreakdown.reduce((sum, entry) => sum + entry.cost, 0)).toBe(12);
+    expect(response.body.data[0].unrecordedConsumption).toHaveLength(1);
+    expect(response.body.data[0].unrecordedFoodBreakdown).toHaveLength(1);
+    expect(response.body.data[0].unrecordedFoodRawMaterialBreakdown[0]).toMatchObject({
+      itemName: item.name,
+      menuItemName: 'Made-to-order dish',
+      quantity: 1,
+      cost: 5
+    });
+  });
+
   it('reports partially paid sales, excludes cancelled and fully refunded bills, and identifies missing food costs', async () => {
     const isolatedHotelId = new mongoose.Types.ObjectId();
     const isolatedPropertyId = new mongoose.Types.ObjectId();
@@ -1970,13 +2051,38 @@ describe('raw material inventory workflow', () => {
       location: 'Main Store',
       session
     }));
+    await PreparedFoodMovement.create({
+      hotelId,
+      propertyId,
+      productionBatchId: new mongoose.Types.ObjectId(),
+      menuItemId: new mongoose.Types.ObjectId(),
+      movementType: 'unrecorded_consumption',
+      quantity: 1,
+      unitCost: 1234.56,
+      totalCost: 1234.56,
+      reason: 'Prepared-food count discrepancy',
+      createdAt: new Date()
+    });
     const dashboard = await invoke(getInventoryDashboard, requestFor({}));
-    expect(dashboard.body.data.unrecordedConsumptionCostThisMonth).toBeGreaterThan(0);
+    expect(dashboard.body.data.unrecordedRawMaterialCostThisMonth).toBeGreaterThan(0);
+    expect(dashboard.body.data.unrecordedPreparedFoodCostThisMonth).toBe(1234.56);
+    expect(dashboard.body.data.unrecordedConsumptionCostThisMonth).toBeCloseTo(
+      dashboard.body.data.unrecordedRawMaterialCostThisMonth
+        + dashboard.body.data.unrecordedPreparedFoodCostThisMonth,
+      2
+    );
+    expect(dashboard.body.data.unrecordedPreparedFoodQuantityThisMonth).toBe(1);
     expect(dashboard.body.data.departmentConsumption.find((entry) => entry._id === 'Restaurant').expense)
       .toBeGreaterThan(0);
     expect(dashboard.body.data.movementTrend.reduce((sum, entry) => sum + entry.incoming, 0)).toBeGreaterThan(0);
     expect(dashboard.body.data.movementTrend.reduce((sum, entry) => sum + entry.wastage, 0)).toBeGreaterThan(0);
     expect(dashboard.body.data.movementTrend.reduce((sum, entry) => sum + entry.unrecordedUsage, 0)).toBeGreaterThan(0);
+    const preparedFoodLossDay = dashboard.body.data.movementTrend.find(
+      (entry) => entry._id === new Date().toISOString().slice(0, 10)
+    );
+    expect(preparedFoodLossDay?.preparedFoodUnrecordedUsage).toBe(1234.56);
+    expect(preparedFoodLossDay?.unrecordedUsage).toBeGreaterThan(0);
+    expect(preparedFoodLossDay?.wastage || 0).not.toBe(1234.56);
     expect(await StockMovement.countDocuments({
       itemId: item._id,
       movementType: { $in: ['issue', 'wastage', 'physical_count'] }

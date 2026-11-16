@@ -1,6 +1,8 @@
 import crypto from 'crypto';
 import { User, Hotel, Property, Subscription } from '../models/index.js';
-import { ROLES, HOTEL_STATUS, SUBSCRIPTION_STATUS } from '../config/constants.js';
+import {
+  ROLES, HOTEL_STATUS, SUBSCRIPTION_STATUS, RESTAURANT_STAFF_ROLES
+} from '../config/constants.js';
 import { generateTokens, verifyRefreshToken } from '../utils/token.js';
 import { sendEmail } from '../services/emailService.js';
 import { notifyPlatformAdmins } from '../services/notificationService.js';
@@ -264,7 +266,7 @@ export const login = async (req, res, next) => {
           ? '/superadmin'
           : user.role === ROLES.RECEPTIONIST
             ? '/frontdesk'
-            : user.role === ROLES.RESTAURANT_STAFF
+            : RESTAURANT_STAFF_ROLES.includes(user.role)
               ? '/restaurant'
               : user.role === ROLES.HOUSEKEEPING_STAFF
                 ? '/housekeeping'

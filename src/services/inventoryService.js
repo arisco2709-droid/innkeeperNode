@@ -401,6 +401,154 @@ export const recordPreparedFoodUse = async ({
   })), duplicate: false };
 };
 
+export const recordDirectInventoryUsage = async ({
+  hotelId,
+  propertyId,
+  targetType,
+  targetId,
+  usageType,
+  quantity,
+  reason = '',
+  location = 'Main Store',
+  recordedBy,
+  idempotencyKey
+}, session) => {
+  if (!['complimentary', 'unrecorded_consumption'].includes(usageType)) {
+    throw Object.assign(new Error('Choose complimentary or unrecorded usage.'), { statusCode: 400 });
+  }
+  if (!['menu_item', 'raw_material'].includes(targetType)
+    || !mongoose.isValidObjectId(targetId)) {
+    throw Object.assign(new Error('Choose a valid menu item or raw material.'), { statusCode: 400 });
+  }
+  const qty = Number(quantity);
+  if (!Number.isFinite(qty) || qty <= 0) {
+    throw Object.assign(new Error('Usage quantity must be greater than zero.'), { statusCode: 400 });
+  }
+  if (!String(reason).trim()) {
+    throw Object.assign(new Error('A reason is required for complimentary or unrecorded usage.'), { statusCode: 400 });
+  }
+  if (!idempotencyKey || idempotencyKey.length > 100) {
+    throw Object.assign(new Error('A valid usage request key is required.'), { statusCode: 400 });
+  }
+
+  const source = usageType === 'complimentary'
+    ? 'manual_complimentary_usage'
+    : 'manual_unrecorded_usage';
+  const existing = await StockMovement.findOne({
+    hotelId,
+    propertyId,
+    'metadata.directUsage.usageId': idempotencyKey
+  }).session(session).lean();
+  if (existing) {
+    const movements = await StockMovement.find({
+      hotelId,
+      propertyId,
+      'metadata.directUsage.usageId': idempotencyKey
+    }).session(session).populate('itemId', 'name unit baseUnit').lean();
+    return { movements, duplicate: true };
+  }
+
+  let targetName;
+  let targetUnit;
+  let usageLocation = location || 'Main Store';
+  let recipeVersion = null;
+  let lines;
+  if (targetType === 'raw_material') {
+    const item = await InventoryItem.findOne({
+      _id: targetId,
+      hotelId,
+      propertyId,
+      inventoryType: 'raw_material',
+      isActive: true
+    }).session(session);
+    if (!item) throw Object.assign(new Error('Active raw material not found.'), { statusCode: 404 });
+    targetName = item.name;
+    targetUnit = item.baseUnit || item.unit;
+    lines = [{
+      itemId: item._id,
+      quantity: qty,
+      unit: targetUnit,
+      conversionFactor: 1
+    }];
+  } else {
+    const recipe = await InventoryRecipe.findOne({
+      _id: targetId,
+      hotelId,
+      propertyId,
+      isActive: true,
+      productionMode: 'made_to_order'
+    }).session(session);
+    if (!recipe) {
+      throw Object.assign(new Error('Select an active made-to-order recipe. Batch-production menu items must be recorded from their prepared batch.'), { statusCode: 404 });
+    }
+    const menuItem = await MenuItem.findOne({ _id: recipe.menuItemId, hotelId }).session(session);
+    if (!menuItem) throw Object.assign(new Error('The menu item for this recipe could not be found.'), { statusCode: 404 });
+    targetName = menuItem.name;
+    targetUnit = recipe.servingSize || 'portion';
+    usageLocation = recipe.location || usageLocation;
+    recipeVersion = recipe.version;
+    const yieldQuantity = Number(recipe.expectedProductionYield) || 1;
+    lines = recipe.ingredients
+      .filter((ingredient) => !ingredient.optional)
+      .map((ingredient) => ({
+        itemId: ingredient.itemId,
+        quantity: Number(ingredient.quantity) * qty / yieldQuantity,
+        unit: ingredient.unit,
+        conversionFactor: ingredient.conversionFactor
+      }));
+    if (!lines.length) throw Object.assign(new Error('The selected recipe has no required ingredients to deduct.'), { statusCode: 400 });
+  }
+
+  const usageSnapshot = {
+    usageId: idempotencyKey,
+    usageType,
+    targetType,
+    targetId: String(targetId),
+    targetName,
+    targetQuantity: qty,
+    targetUnit,
+    reason: String(reason).trim(),
+    recipeVersion
+  };
+  const movements = [];
+  for (const [index, line] of lines.entries()) {
+    const item = await InventoryItem.findOne({
+      _id: line.itemId,
+      hotelId,
+      propertyId,
+      isActive: true
+    }).session(session);
+    if (!item) throw Object.assign(new Error('A selected usage item is no longer active.'), { statusCode: 409 });
+    const movementResult = await postStockMovement({
+      hotelId,
+      propertyId,
+      itemId: item._id,
+      movementType: 'issue',
+      quantity: line.quantity,
+      unit: line.unit || item.baseUnit || item.unit,
+      conversionFactor: line.conversionFactor || undefined,
+      location: usageLocation,
+      department: 'Restaurant',
+      referenceNumber: `USAGE-${idempotencyKey.slice(-12)}`,
+      notes: `${usageType === 'complimentary' ? 'Complimentary' : 'Unrecorded'} ${targetType === 'menu_item' ? 'menu item' : 'raw material'} usage: ${targetName}. ${String(reason).trim()}`,
+      recordedBy,
+      idempotencyKey: `${idempotencyKey}:${index}`,
+      metadata: {
+        source,
+        directUsage: usageSnapshot
+      },
+      session
+    });
+    movements.push(movementResult.movement);
+  }
+  return {
+    movements,
+    duplicate: false,
+    totalCost: roundMoney(movements.reduce((sum, movement) => sum + Number(movement.totalValue || 0), 0)),
+    usage: usageSnapshot
+  };
+};
+
 export const transferPreparedFood = async ({
   hotelId, propertyId, productionBatchId, quantity, destinationLocation, destinationLocationId,
   recordedBy, idempotencyKey, notes = ''

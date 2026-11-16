@@ -7,7 +7,7 @@ import {
 import { generateReference } from '../utils/reference.js';
 import { logAudit } from '../services/auditService.js';
 import {
-  getInventoryBatchAverageCosts, postStockMovement, runInventoryTransaction, transferStock
+  getInventoryBatchAverageCosts, postStockMovement, recordDirectInventoryUsage, runInventoryTransaction, transferStock
 } from '../services/inventoryService.js';
 import { resolveStorageLocation } from '../services/storageLocationService.js';
 import { convertQuantityToBase, getUnitConversionFactor, normalizeInventoryUnit } from '../config/inventoryUnits.js';
@@ -60,6 +60,112 @@ const tenantFilter = (req) => ({
   ...(req.propertyId ? { propertyId: req.propertyId } : {})
 });
 
+export const getDirectInventoryUsage = async (req, res, next) => {
+  try {
+    const filter = {
+      ...tenantFilter(req),
+      'metadata.source': { $in: ['manual_complimentary_usage', 'manual_unrecorded_usage'] }
+    };
+    const recentMovements = await StockMovement.find(filter)
+      .select('metadata createdAt')
+      .sort({ createdAt: -1 })
+      .limit(Math.min(1000, Math.max(1, Number(req.query.limit) || 500)))
+      .lean();
+    const usageIds = [...new Set(recentMovements
+      .map((movement) => movement.metadata?.directUsage?.usageId)
+      .filter(Boolean))];
+    const movements = usageIds.length
+      ? await StockMovement.find({
+        ...filter,
+        'metadata.directUsage.usageId': { $in: usageIds }
+      })
+        .populate('itemId', 'name code unit baseUnit')
+        .sort({ createdAt: -1 })
+        .lean()
+      : [];
+    const groups = new Map();
+    for (const movement of movements) {
+      const usage = movement.metadata?.directUsage;
+      if (!usage?.usageId) continue;
+      const row = groups.get(usage.usageId) || {
+        _id: usage.usageId,
+        ...usage,
+        movementType: usage.usageType,
+        createdAt: movement.createdAt,
+        location: movement.location || '',
+        totalCost: 0,
+        ingredients: []
+      };
+      row.totalCost += Number(movement.totalValue) || 0;
+      row.createdAt = new Date(movement.createdAt) > new Date(row.createdAt)
+        ? movement.createdAt
+        : row.createdAt;
+      row.ingredients.push({
+        itemId: String(movement.itemId?._id || movement.itemId),
+        itemName: movement.itemId?.name || 'Raw material',
+        quantity: Number(movement.quantity) || 0,
+        unit: movement.baseUnit || movement.itemId?.baseUnit || movement.itemId?.unit || '',
+        cost: Number(movement.totalValue) || 0
+      });
+      groups.set(usage.usageId, row);
+    }
+    res.json({
+      success: true,
+      data: [...groups.values()].map((row) => ({
+        ...row,
+        totalCost: Math.round(row.totalCost * 100) / 100
+      }))
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const createDirectInventoryUsage = async (req, res, next) => {
+  try {
+    if (!adminOnly(req, res)) return;
+    const { targetType, targetId, usageType, quantity, reason, location } = req.body;
+    const idempotencyKey = String(req.body.idempotencyKey || req.get('Idempotency-Key') || '');
+    if (!idempotencyKey.trim()) {
+      return res.status(400).json({ success: false, message: 'A usage request key is required to prevent duplicate stock updates.' });
+    }
+    const result = await runInventoryTransaction((session) => recordDirectInventoryUsage({
+      hotelId: req.hotelId,
+      propertyId: req.propertyId,
+      targetType,
+      targetId,
+      usageType,
+      quantity,
+      reason,
+      location,
+      recordedBy: req.user._id,
+      idempotencyKey
+    }, session));
+    if (!result.duplicate) {
+      await logAudit({
+        hotelId: req.hotelId,
+        action: usageType === 'complimentary'
+          ? 'RECORD_DIRECT_COMPLIMENTARY_USAGE'
+          : 'RECORD_DIRECT_UNRECORDED_USAGE',
+        entity: 'StockMovement',
+        entityId: result.movements[0]?._id,
+        details: {
+          targetType,
+          targetId,
+          usageType,
+          quantity,
+          totalCost: result.totalCost,
+          reason
+        },
+        req
+      });
+    }
+    res.status(result.duplicate ? 200 : 201).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const dateFilter = (query) => {
   const filter = {};
   if (query.from) {
@@ -86,7 +192,7 @@ export const getInventoryDashboard = async (req, res, next) => {
     const movementTrendStart = new Date(now);
     movementTrendStart.setDate(movementTrendStart.getDate() - 13);
     movementTrendStart.setHours(0, 0, 0, 0);
-    const [items, expiredBatches, batchValues, pendingOrders, monthPurchases, recent, expiring, monthlyPurchases, departmentUse, monthlyCosts, unrecordedConsumption, movementTrend] = await Promise.all([
+    const [items, expiredBatches, batchValues, pendingOrders, monthPurchases, recent, expiring, monthlyPurchases, departmentUse, monthlyCosts, unrecordedConsumption, preparedFoodUnrecordedMonth, movementTrend, preparedFoodUnrecordedTrend] = await Promise.all([
       InventoryItem.find({ ...scope, isActive: true })
         .select('name currentStock minStockThreshold unitCost unit baseUnit stockVerificationIntervalDays createdAt')
         .lean(),
@@ -140,10 +246,32 @@ export const getInventoryDashboard = async (req, res, next) => {
         { $group: { _id: '$movementType', total: { $sum: '$totalValue' } } }
       ]),
       StockMovement.aggregate([
-        { $match: { ...scope, movementType: 'issue', 'metadata.source': 'stock_verification_unrecorded_consumption' } },
+        {
+          $match: {
+            ...scope,
+            movementType: 'issue',
+            'metadata.source': { $in: ['stock_verification_unrecorded_consumption', 'manual_unrecorded_usage'] }
+          }
+        },
         { $addFields: { effectiveDate: { $ifNull: ['$transactionDate', '$createdAt'] } } },
         { $match: { effectiveDate: { $gte: monthStart, $lt: nextMonth } } },
         { $group: { _id: null, total: { $sum: '$totalValue' }, quantity: { $sum: '$quantity' } } }
+      ]),
+      PreparedFoodMovement.aggregate([
+        {
+          $match: {
+            ...scope,
+            movementType: 'unrecorded_consumption',
+            createdAt: { $gte: monthStart, $lt: nextMonth }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: '$totalCost' },
+            quantity: { $sum: '$quantity' }
+          }
+        }
       ]),
       StockMovement.aggregate([
         {
@@ -162,7 +290,12 @@ export const getInventoryDashboard = async (req, res, next) => {
             unrecordedUsage: {
               $sum: {
                 $cond: [
-                  { $eq: ['$metadata.source', 'stock_verification_unrecorded_consumption'] },
+                  {
+                    $in: [
+                      '$metadata.source',
+                      ['stock_verification_unrecorded_consumption', 'manual_unrecorded_usage']
+                    ]
+                  },
                   '$totalValue',
                   0
                 ]
@@ -174,7 +307,14 @@ export const getInventoryDashboard = async (req, res, next) => {
                   {
                     $and: [
                       { $in: ['$movementType', ['issue', 'department_issue', 'recipe_consumption']] },
-                      { $ne: ['$metadata.source', 'stock_verification_unrecorded_consumption'] }
+                      {
+                        $not: [{
+                          $in: [
+                            '$metadata.source',
+                            ['stock_verification_unrecorded_consumption', 'manual_unrecorded_usage']
+                          ]
+                        }]
+                      }
                     ]
                   },
                   '$totalValue',
@@ -185,8 +325,43 @@ export const getInventoryDashboard = async (req, res, next) => {
           }
         },
         { $sort: { _id: 1 } }
+      ]),
+      PreparedFoodMovement.aggregate([
+        {
+          $match: {
+            ...scope,
+            movementType: 'unrecorded_consumption',
+            createdAt: { $gte: movementTrendStart, $lte: now }
+          }
+        },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+            total: { $sum: '$totalCost' }
+          }
+        },
+        { $sort: { _id: 1 } }
       ])
     ]);
+    const preparedFoodUnrecordedByDate = new Map(
+      preparedFoodUnrecordedTrend.map((entry) => [entry._id, Number(entry.total) || 0])
+    );
+    const movementTrendWithPreparedFoodLoss = movementTrend.map((entry) => ({
+      ...entry,
+      preparedFoodUnrecordedUsage: preparedFoodUnrecordedByDate.get(entry._id) || 0
+    }));
+    for (const [date, total] of preparedFoodUnrecordedByDate) {
+      if (movementTrendWithPreparedFoodLoss.some((entry) => entry._id === date)) continue;
+      movementTrendWithPreparedFoodLoss.push({
+        _id: date,
+        incoming: 0,
+        wastage: 0,
+        unrecordedUsage: 0,
+        recordedUsage: 0,
+        preparedFoodUnrecordedUsage: total
+      });
+    }
+    movementTrendWithPreparedFoodLoss.sort((left, right) => left._id.localeCompare(right._id));
     const [settings, latestVerifications] = await Promise.all([
       InventorySettings.findOne(scope).lean(),
       StockVerification.aggregate([
@@ -230,10 +405,16 @@ export const getInventoryDashboard = async (req, res, next) => {
         outOfStockItems: availableByItem.filter((item) => item.available <= 0).length,
         pendingPurchaseOrders: pendingOrders,
         purchasesThisMonth: monthPurchases[0]?.total || 0,
-        consumptionCostThisMonth: ['issue', 'department_issue', 'recipe_consumption']
-          .reduce((sum, type) => sum + (monthlyCostByType[type] || 0), 0),
-        unrecordedConsumptionCostThisMonth: unrecordedConsumption[0]?.total || 0,
+        consumptionCostThisMonth: Math.max(0,
+          ['issue', 'department_issue', 'recipe_consumption']
+            .reduce((sum, type) => sum + (monthlyCostByType[type] || 0), 0)
+            - (unrecordedConsumption[0]?.total || 0)),
+        unrecordedConsumptionCostThisMonth: (unrecordedConsumption[0]?.total || 0)
+          + (preparedFoodUnrecordedMonth[0]?.total || 0),
+        unrecordedRawMaterialCostThisMonth: unrecordedConsumption[0]?.total || 0,
+        unrecordedPreparedFoodCostThisMonth: preparedFoodUnrecordedMonth[0]?.total || 0,
         unrecordedConsumptionQuantityThisMonth: Math.abs(unrecordedConsumption[0]?.quantity || 0),
+        unrecordedPreparedFoodQuantityThisMonth: preparedFoodUnrecordedMonth[0]?.quantity || 0,
         wastageCostThisMonth: (monthlyCostByType.wastage || 0) + (monthlyCostByType.expiry || 0),
         purchaseCountThisMonth: monthPurchases[0]?.count || 0,
         pendingStockVerifications: pendingVerifications.length,
@@ -241,7 +422,7 @@ export const getInventoryDashboard = async (req, res, next) => {
         verificationIntervalDays: settings?.verificationIntervalDays || 1,
         monthlyPurchases,
         departmentConsumption: departmentUse,
-        movementTrend,
+        movementTrend: movementTrendWithPreparedFoodLoss,
         recentActivities: recent,
         expiringProducts: expiring
       }
@@ -1538,7 +1719,7 @@ export const getInventoryReport = async (req, res, next) => {
       const hotel = req.hotel || await Hotel.findById(req.hotelId).select('timezone');
       const timeZone = hotel?.timezone || 'UTC';
       const profitLossDateRange = hotelLocalDateFilter(from, to, timeZone);
-      const [orders, lossMovements, unrecordedMovements, preparedLossMovements, purchaseMovements] = await Promise.all([
+      const [orders, lossMovements, unrecordedMovements, preparedLossMovements, directComplimentaryMovements, directUnrecordedMovements, purchaseMovements] = await Promise.all([
         FoodOrder.find({
           ...scope,
           status: { $ne: 'cancelled' },
@@ -1559,13 +1740,23 @@ export const getInventoryReport = async (req, res, next) => {
         StockMovement.find({
           ...scope,
           movementType: 'issue',
-          'metadata.source': 'stock_verification_unrecorded_consumption',
-          ...(profitLossDateRange ? {
-            $or: [
+          $and: [
+            {
+              $or: [
+                { 'metadata.source': 'stock_verification_unrecorded_consumption' },
+                {
+                  'metadata.source': 'manual_unrecorded_usage',
+                  'metadata.directUsage.targetType': 'raw_material'
+                }
+              ]
+            },
+            ...(profitLossDateRange ? [{
+              $or: [
               { transactionDate: profitLossDateRange },
               { transactionDate: { $exists: false }, createdAt: profitLossDateRange }
-            ]
-          } : {})
+              ]
+            }] : [])
+          ]
         }).populate('itemId', 'name code unit baseUnit')
           .select('itemId totalValue quantity unitCost department transactionDate createdAt referenceNumber notes metadata').lean(),
         PreparedFoodMovement.find({
@@ -1574,6 +1765,31 @@ export const getInventoryReport = async (req, res, next) => {
           ...(profitLossDateRange ? { createdAt: profitLossDateRange } : {})
         }).populate('menuItemId', 'name')
           .select('menuItemId productionBatchId movementType quantity unitCost totalCost reason notes location orderNumber createdAt').lean(),
+        StockMovement.find({
+          ...scope,
+          movementType: 'issue',
+          'metadata.source': 'manual_complimentary_usage',
+          ...(profitLossDateRange ? {
+            $or: [
+              { transactionDate: profitLossDateRange },
+              { transactionDate: { $exists: false }, createdAt: profitLossDateRange }
+            ]
+          } : {})
+        }).populate('itemId', 'name code unit baseUnit')
+          .select('itemId totalValue quantity transactionDate createdAt referenceNumber notes metadata location').lean(),
+        StockMovement.find({
+          ...scope,
+          movementType: 'issue',
+          'metadata.source': 'manual_unrecorded_usage',
+          'metadata.directUsage.targetType': 'menu_item',
+          ...(profitLossDateRange ? {
+            $or: [
+              { transactionDate: profitLossDateRange },
+              { transactionDate: { $exists: false }, createdAt: profitLossDateRange }
+            ]
+          } : {})
+        }).populate('itemId', 'name code unit baseUnit')
+          .select('itemId totalValue quantity transactionDate createdAt referenceNumber notes metadata location').lean(),
         StockMovement.find({
           ...scope,
           movementType: 'receipt',
@@ -1731,6 +1947,9 @@ export const getInventoryReport = async (req, res, next) => {
       }));
       const unrecordedConsumption = unrecordedMovements.map((movement) => ({
         itemName: movement.itemId?.name || 'Inventory item',
+        menuItemName: movement.metadata?.directUsage?.targetType === 'menu_item'
+          ? movement.metadata.directUsage.targetName
+          : '',
         code: movement.itemId?.code || '',
         quantity: Number(movement.quantity) || 0,
         unit: movement.itemId?.baseUnit || movement.itemId?.unit || '',
@@ -1740,6 +1959,41 @@ export const getInventoryReport = async (req, res, next) => {
         reference: movement.referenceNumber || '',
         reason: movement.notes || ''
       }));
+      const groupDirectUsageMovements = (movements) => {
+        const grouped = new Map();
+        for (const movement of movements) {
+          const usage = movement.metadata?.directUsage;
+          if (!usage?.usageId) continue;
+          const row = grouped.get(usage.usageId) || {
+            usageId: usage.usageId,
+            itemName: usage.targetName || movement.itemId?.name || 'Inventory item',
+            targetType: usage.targetType,
+            quantity: Number(usage.targetQuantity) || 0,
+            unit: usage.targetUnit || (usage.targetType === 'menu_item'
+              ? 'portion'
+              : movement.itemId?.baseUnit || movement.itemId?.unit || ''),
+            cost: 0,
+            date: movement.transactionDate || movement.createdAt,
+            location: movement.location || '',
+            reference: movement.referenceNumber || '',
+            reason: usage.reason || movement.notes || '',
+            ingredients: []
+          };
+          row.cost += Number(movement.totalValue) || 0;
+          row.ingredients.push({
+            itemId: String(movement.itemId?._id || movement.itemId),
+            itemName: movement.itemId?.name || 'Raw material',
+            quantity: Number(movement.quantity) || 0,
+            unit: movement.baseUnit || movement.itemId?.baseUnit || movement.itemId?.unit || '',
+            cost: Number(movement.totalValue) || 0,
+            menuItemName: usage.targetType === 'menu_item' ? usage.targetName : ''
+          });
+          grouped.set(usage.usageId, row);
+        }
+        return [...grouped.values()].map((entry) => ({ ...entry, cost: round(entry.cost) }));
+      };
+      const directComplimentaryUsage = groupDirectUsageMovements(directComplimentaryMovements);
+      const directUnrecordedMenuUsage = groupDirectUsageMovements(directUnrecordedMovements);
       const stockWastageCost = lossMovements.reduce((sum, movement) => sum + (Number(movement.totalValue) || 0), 0);
       const unrecordedConsumptionCost = unrecordedMovements.reduce((sum, movement) => sum + (Number(movement.totalValue) || 0), 0);
       const preparedWastageBreakdown = preparedLossMovements
@@ -1768,7 +2022,19 @@ export const getInventoryReport = async (req, res, next) => {
           date: movement.createdAt,
           location: movement.location || '',
           reason: movement.reason || movement.notes || ''
-        }));
+        }))
+        .concat(directComplimentaryUsage.map((entry) => ({
+          itemName: entry.itemName,
+          quantity: entry.quantity,
+          unit: entry.unit,
+          cost: entry.cost,
+          date: entry.date,
+          location: entry.location,
+          reference: entry.reference,
+          reason: entry.reason,
+          targetType: entry.targetType,
+          ingredients: entry.ingredients
+        })));
       const unrecordedFoodBreakdown = preparedLossMovements
         .filter((movement) => movement.movementType === 'unrecorded_consumption')
         .map((movement) => ({
@@ -1780,7 +2046,19 @@ export const getInventoryReport = async (req, res, next) => {
           location: movement.location || '',
           reference: movement.orderNumber || '',
           reason: movement.reason || movement.notes || ''
-        }));
+        }))
+        .concat(directUnrecordedMenuUsage.map((entry) => ({
+          itemName: entry.itemName,
+          quantity: entry.quantity,
+          unit: entry.unit,
+          cost: entry.cost,
+          date: entry.date,
+          location: entry.location,
+          reference: entry.reference,
+          reason: entry.reason,
+          ingredients: entry.ingredients,
+          targetType: entry.targetType
+        })));
       const staffConsumptionBreakdown = preparedLossMovements
         .filter((movement) => movement.movementType === 'staff_consumption')
         .map((movement) => ({
@@ -1839,8 +2117,26 @@ export const getInventoryReport = async (req, res, next) => {
           cost: round(entry.cost)
         }));
       };
-      const complimentaryRawMaterialBreakdown = allocatePreparedFoodRawMaterials('complimentary');
-      const unrecordedFoodRawMaterialBreakdown = allocatePreparedFoodRawMaterials('unrecorded_consumption');
+      const complimentaryRawMaterialBreakdown = [
+        ...allocatePreparedFoodRawMaterials('complimentary'),
+        ...directComplimentaryUsage.flatMap((entry) => entry.ingredients.map((ingredient) => ({
+          ...ingredient,
+          date: entry.date,
+          location: entry.location,
+          reference: entry.reference,
+          reason: entry.reason
+        })))
+      ];
+      const unrecordedFoodRawMaterialBreakdown = [
+        ...allocatePreparedFoodRawMaterials('unrecorded_consumption'),
+        ...directUnrecordedMenuUsage.flatMap((entry) => entry.ingredients.map((ingredient) => ({
+          ...ingredient,
+          date: entry.date,
+          location: entry.location,
+          reference: entry.reference,
+          reason: entry.reason
+        })))
+      ];
       const netProfit = grossProfit === null ? null : grossProfit - inventoryLoss;
       const rounded = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
       const roundedOrNull = (value) => value === null ? null : rounded(value);
@@ -1872,7 +2168,9 @@ export const getInventoryReport = async (req, res, next) => {
           unrecordedFoodQuantity: round(unrecordedFoodBreakdown.reduce((sum, entry) => sum + entry.quantity, 0)),
           unrecordedFoodCost: rounded(unrecordedFoodCost),
           preparedWastageCost: rounded(preparedWastageCost),
-          complimentaryQuantity: round(complimentaryBreakdown.reduce((sum, entry) => sum + entry.quantity, 0)),
+          complimentaryQuantity: round(complimentaryBreakdown
+            .filter((entry) => entry.unit === 'portion' || entry.targetType === 'menu_item')
+            .reduce((sum, entry) => sum + entry.quantity, 0)),
           complimentaryCost: rounded(complimentaryCost),
           staffConsumptionQuantity: round(staffConsumptionBreakdown.reduce((sum, entry) => sum + entry.quantity, 0)),
           staffConsumptionCost: rounded(staffConsumptionCost),

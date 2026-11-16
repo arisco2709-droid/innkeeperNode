@@ -1,5 +1,10 @@
 import mongoose from 'mongoose';
 
+const paymentAllocationSchema = new mongoose.Schema({
+  invoiceId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseInvoice', required: true },
+  amount: { type: Number, required: true, min: 0.01 }
+}, { _id: false });
+
 const supplierPaymentSchema = new mongoose.Schema({
   hotelId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hotel', required: true, index: true },
   propertyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Property', required: true, index: true },
@@ -8,6 +13,8 @@ const supplierPaymentSchema = new mongoose.Schema({
   paymentMethod: { type: String, enum: ['cash', 'card', 'bank_transfer', 'upi', 'cheque', 'other'], default: 'bank_transfer' },
   referenceNumber: { type: String, trim: true, default: '' },
   invoiceNumber: { type: String, trim: true, default: '' },
+  allocations: { type: [paymentAllocationSchema], default: [] },
+  attachment: { type: String, trim: true, default: '' },
   notes: { type: String, trim: true, default: '' },
   idempotencyKey: { type: String, default: undefined },
   recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },

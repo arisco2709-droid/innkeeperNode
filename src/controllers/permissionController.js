@@ -1,4 +1,4 @@
-import { ROLES } from '../config/constants.js';
+import { HOTEL_STAFF_ROLES } from '../config/constants.js';
 import { StaffProfile, User } from '../models/index.js';
 import { logAudit } from '../services/auditService.js';
 import {
@@ -9,20 +9,13 @@ import {
   isValidPermissionOverride
 } from '../services/permissions.js';
 
-const STAFF_ROLES = [
-  ROLES.RECEPTIONIST,
-  ROLES.RESTAURANT_STAFF,
-  ROLES.HOUSEKEEPING_STAFF,
-  ROLES.MAINTENANCE_STAFF
-];
-
 export const getPermissionSettings = async (req, res, next) => {
   try {
     const profiles = await StaffProfile.find({ hotelId: req.hotelId })
       .populate('userId', 'name email role isActive permissionOverrides')
       .sort({ createdAt: -1 });
     const users = profiles
-      .filter(({ userId }) => userId && STAFF_ROLES.includes(userId.role))
+      .filter(({ userId }) => userId && HOTEL_STAFF_ROLES.includes(userId.role))
       .map(({ userId, department, designation }) => ({
         id: String(userId._id),
         name: userId.name,
@@ -33,7 +26,7 @@ export const getPermissionSettings = async (req, res, next) => {
         designation,
         permissionOverrides: getPermissionOverrides(userId)
       }));
-    const roleDefaults = Object.fromEntries(STAFF_ROLES.map((role) => {
+    const roleDefaults = Object.fromEntries(HOTEL_STAFF_ROLES.map((role) => {
       const defaults = {};
       PERMISSION_MODULES.forEach(({ key }) => {
         PERMISSION_ACTIONS.forEach((action) => {
@@ -50,7 +43,13 @@ export const getPermissionSettings = async (req, res, next) => {
         users,
         modules: PERMISSION_MODULES.map(({ key, label }) => ({ key, label })),
         actions: PERMISSION_ACTIONS,
-        roleDefaults
+        roleDefaults,
+        accessLevels: [
+          { key: 'none', label: 'Cannot view' },
+          { key: 'view_only', label: 'View only' },
+          { key: 'read', label: 'Read' },
+          { key: 'write', label: 'Write' }
+        ]
       }
     });
   } catch (error) {
@@ -71,7 +70,7 @@ export const updateUserPermissions = async (req, res, next) => {
     const targetUser = await User.findOne({
       _id: req.params.id,
       hotelId: req.hotelId,
-      role: { $in: STAFF_ROLES }
+      role: { $in: HOTEL_STAFF_ROLES }
     });
     if (!targetUser) {
       return res.status(404).json({ success: false, message: 'Staff user not found for this hotel.' });

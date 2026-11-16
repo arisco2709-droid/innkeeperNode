@@ -38,9 +38,11 @@ import {
   approvePurchaseOrder,
   assignMinibarStock,
   createDepartmentRequest,
+  createDirectInventoryUsage,
   createStockAdjustment,
   exportInventoryReport,
   getDepartmentRequests,
+  getDirectInventoryUsage,
   getGoodsReceipts,
   getInventoryDashboard,
   getInventoryReport,
@@ -74,8 +76,28 @@ import {
   getStorageLocations,
   updateStorageLocation
 } from '../controllers/storageLocationController.js';
+import {
+  approvePurchaseInvoice,
+  approveSupplierReturn,
+  cancelProcurementOrder,
+  completeSupplierReturn,
+  createInvoicePayment,
+  createOrderFromRequisition,
+  createPurchaseInvoice,
+  createPurchaseRequisition,
+  createSupplierReturn,
+  exportProcurementReport,
+  getProcurementDashboard,
+  inspectGoodsReceipt,
+  listPurchaseInvoices,
+  listPurchaseRequisitions,
+  listSupplierReturns,
+  reviewProcurementOrder,
+  reviewPurchaseRequisition,
+  verifyPurchaseInvoice
+} from '../controllers/procurementController.js';
+import { SupplierPayment } from '../models/SupplierPayment.js';
 import { authenticate, requireTenant, authorize } from '../middlewares/auth.js';
-import { ROLES } from '../config/constants.js';
 import { validatePhoneFields } from '../middlewares/phoneValidator.js';
 
 const router = Router();
@@ -85,34 +107,36 @@ router.use(requireTenant);
 
 router.get('/items', getInventoryItems);
 router.get('/batches', getInventoryBatches);
-router.get('/raw-materials/categories', authorize(ROLES.HOTEL_ADMIN), getRawMaterialCategories);
-router.post('/raw-materials/categories', authorize(ROLES.HOTEL_ADMIN), createRawMaterialCategory);
-router.patch('/raw-materials/categories/:id', authorize(ROLES.HOTEL_ADMIN), updateRawMaterialCategory);
-router.get('/raw-materials/subcategories', authorize(ROLES.HOTEL_ADMIN), getRawMaterialSubcategories);
-router.post('/raw-materials/subcategories', authorize(ROLES.HOTEL_ADMIN), createRawMaterialSubcategory);
-router.patch('/raw-materials/subcategories/:id', authorize(ROLES.HOTEL_ADMIN), updateRawMaterialSubcategory);
+router.get('/raw-materials/categories', getRawMaterialCategories);
+router.post('/raw-materials/categories', authorize(), createRawMaterialCategory);
+router.patch('/raw-materials/categories/:id', authorize(), updateRawMaterialCategory);
+router.get('/raw-materials/subcategories', getRawMaterialSubcategories);
+router.post('/raw-materials/subcategories', authorize(), createRawMaterialSubcategory);
+router.patch('/raw-materials/subcategories/:id', authorize(), updateRawMaterialSubcategory);
 router.get('/raw-materials', getRawMaterials);
-router.post('/raw-materials', authorize(ROLES.HOTEL_ADMIN), createRawMaterial);
-router.patch('/raw-materials/:id', authorize(ROLES.HOTEL_ADMIN), updateRawMaterial);
+router.post('/raw-materials', authorize(), createRawMaterial);
+router.patch('/raw-materials/:id', authorize(), updateRawMaterial);
 router.get('/units', getInventoryUnits);
-router.post('/units', authorize(ROLES.HOTEL_ADMIN), createInventoryUnit);
-router.post('/units/defaults', authorize(ROLES.HOTEL_ADMIN), createDefaultInventoryUnits);
-router.patch('/units/:id', authorize(ROLES.HOTEL_ADMIN), updateInventoryUnit);
-router.delete('/units/:id', authorize(ROLES.HOTEL_ADMIN), deleteInventoryUnit);
-router.post('/items', authorize(ROLES.HOTEL_ADMIN), createInventoryItem);
-router.patch('/items/:id', authorize(ROLES.HOTEL_ADMIN), updateInventoryItem);
+router.post('/units', authorize(), createInventoryUnit);
+router.post('/units/defaults', authorize(), createDefaultInventoryUnits);
+router.patch('/units/:id', authorize(), updateInventoryUnit);
+router.delete('/units/:id', authorize(), deleteInventoryUnit);
+router.post('/items', authorize(), createInventoryItem);
+router.patch('/items/:id', authorize(), updateInventoryItem);
 router.post('/movements', recordStockMovement);
+router.get('/usage', getDirectInventoryUsage);
+router.post('/usage', createDirectInventoryUsage);
 router.get('/dashboard', getInventoryDashboard);
 router.get('/settings', getInventorySettings);
-router.patch('/settings', authorize(ROLES.HOTEL_ADMIN), updateInventorySettings);
+router.patch('/settings', authorize(), updateInventorySettings);
 router.get('/verifications', getStockVerifications);
 router.post('/verifications', createStockVerification);
 router.get('/locations', getStockLocations);
 router.get('/storage-location-types', getStorageLocationTypes);
 router.get('/storage-locations', getStorageLocations);
-router.post('/storage-locations', authorize(ROLES.HOTEL_ADMIN), createStorageLocation);
-router.patch('/storage-locations/:id', authorize(ROLES.HOTEL_ADMIN), updateStorageLocation);
-router.post('/transfers', authorize(ROLES.HOTEL_ADMIN), transferStockBetweenLocations);
+router.post('/storage-locations', authorize(), createStorageLocation);
+router.patch('/storage-locations/:id', authorize(), updateStorageLocation);
+router.post('/transfers', authorize(), transferStockBetweenLocations);
 router.get('/ledger', getStockLedger);
 router.get('/adjustments', getStockAdjustments);
 router.post('/adjustments', createStockAdjustment);
@@ -121,31 +145,66 @@ router.get('/reports/export', exportInventoryReport);
 router.get('/reports', getInventoryReport);
 
 router.get('/vendors', getVendors);
-router.post('/vendors', authorize(ROLES.HOTEL_ADMIN), validatePhoneFields({ path: 'phone', required: true }), createVendor);
-router.patch('/vendors/:id', authorize(ROLES.HOTEL_ADMIN), updateVendor);
-router.get('/vendors/:id/purchases', authorize(ROLES.HOTEL_ADMIN), getVendorPurchases);
-router.get('/vendors/:id/payments', authorize(ROLES.HOTEL_ADMIN), getVendorPayments);
-router.post('/vendors/:id/payments', authorize(ROLES.HOTEL_ADMIN), recordVendorPayment);
+router.post('/vendors', authorize(), validatePhoneFields({ path: 'phone', required: true }), createVendor);
+router.patch('/vendors/:id', authorize(), updateVendor);
+router.get('/vendors/:id/purchases', authorize(), getVendorPurchases);
+router.get('/vendors/:id/payments', authorize(), getVendorPayments);
+router.post('/vendors/:id/payments', authorize(), recordVendorPayment);
 
 router.get('/purchase-orders', getPurchaseOrders);
-router.post('/purchase-orders', authorize(ROLES.HOTEL_ADMIN), createPurchaseOrder);
-router.patch('/purchase-orders/:id/review', authorize(ROLES.HOTEL_ADMIN), reviewAutomaticReorder);
+router.post('/purchase-orders', authorize(), createPurchaseOrder);
+router.patch('/purchase-orders/:id/review', authorize(), reviewAutomaticReorder);
 router.patch('/purchase-orders/:id/approve', approvePurchaseOrder);
-router.patch('/purchase-orders/:id/receive', authorize(ROLES.HOTEL_ADMIN), receivePurchaseOrderGoods);
+router.patch('/purchase-orders/:id/receive', authorize(), receivePurchaseOrderGoods);
 router.get('/goods-receipts', getGoodsReceipts);
+
+router.get('/procurement/dashboard', authorize(), getProcurementDashboard);
+router.get('/procurement/requisitions', authorize(), listPurchaseRequisitions);
+router.post('/procurement/requisitions', authorize(), createPurchaseRequisition);
+router.patch('/procurement/requisitions/:id/review', authorize(), reviewPurchaseRequisition);
+router.get('/procurement/orders', authorize(), getPurchaseOrders);
+router.post('/procurement/orders/from-requisition/:id', authorize(), createOrderFromRequisition);
+router.patch('/procurement/orders/:id/review', authorize(), reviewProcurementOrder);
+router.patch('/procurement/orders/:id/cancel', authorize(), cancelProcurementOrder);
+router.get('/procurement/receipts', authorize(), getGoodsReceipts);
+router.patch('/procurement/receipts/:id/inspect', authorize(), inspectGoodsReceipt);
+router.get('/procurement/suppliers', authorize(), getVendors);
+router.post('/procurement/suppliers', authorize(), validatePhoneFields({ path: 'phone', required: true }), createVendor);
+router.patch('/procurement/suppliers/:id', authorize(), updateVendor);
+router.get('/procurement/invoices', authorize(), listPurchaseInvoices);
+router.post('/procurement/invoices', authorize(), createPurchaseInvoice);
+router.patch('/procurement/invoices/:id/verify', authorize(), verifyPurchaseInvoice);
+router.patch('/procurement/invoices/:id/approve', authorize(), approvePurchaseInvoice);
+router.get('/procurement/payments', authorize(), async (req, res, next) => {
+  try {
+    const data = await SupplierPayment.find({
+      hotelId: req.hotelId, propertyId: req.propertyId
+    }).populate('vendorId', 'name supplierCode').populate('recordedBy', 'name')
+      .populate('allocations.invoiceId', 'supplierInvoiceNumber').sort({ paidAt: -1 }).limit(500).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    next(error);
+  }
+});
+router.post('/procurement/payments', authorize(), createInvoicePayment);
+router.get('/procurement/returns', authorize(), listSupplierReturns);
+router.post('/procurement/returns', authorize(), createSupplierReturn);
+router.patch('/procurement/returns/:id/approve', authorize(), approveSupplierReturn);
+router.patch('/procurement/returns/:id/complete', authorize(), completeSupplierReturn);
+router.get('/procurement/reports', authorize(), exportProcurementReport);
 
 router.get('/department-requests', getDepartmentRequests);
 router.post('/department-requests', createDepartmentRequest);
 router.patch('/department-requests/:id/review', reviewDepartmentRequest);
 
 router.get('/recipes', getRecipes);
-router.post('/recipes', authorize(ROLES.HOTEL_ADMIN), saveRecipe);
-router.patch('/recipes/:id/status', authorize(ROLES.HOTEL_ADMIN), setRecipeStatus);
+router.post('/recipes', authorize(), saveRecipe);
+router.patch('/recipes/:id/status', authorize(), setRecipeStatus);
 router.get('/production', getProductionDashboard);
-router.post('/production', createProductionEntry);
-router.post('/production/:id/transfer', transferProductionBatch);
-router.post('/production/:id/cancel', cancelProductionEntry);
-router.post('/production/:id/movements', recordPreparedFoodMovement);
+router.post('/production', authorize(), createProductionEntry);
+router.post('/production/:id/transfer', authorize(), transferProductionBatch);
+router.post('/production/:id/cancel', authorize(), cancelProductionEntry);
+router.post('/production/:id/movements', authorize(), recordPreparedFoodMovement);
 router.get('/minibar/rooms', getMinibarRooms);
 router.get('/minibar/rooms/:roomId', getMinibarRoomStock);
 router.post('/minibar/rooms/:roomId/stock', assignMinibarStock);

@@ -7,8 +7,8 @@ import {
   reviewLeaveRequest,
   updateLeaveTypes
 } from '../controllers/leaveController.js';
-import { authenticate, authorize, requireTenant } from '../middlewares/auth.js';
-import { ROLES } from '../config/constants.js';
+import { authenticate, authorize, authorizeRoles, requireTenant } from '../middlewares/auth.js';
+import { HOTEL_STAFF_ROLES, ROLES } from '../config/constants.js';
 
 const router = Router();
 
@@ -16,16 +16,10 @@ router.use(authenticate);
 router.use(requireTenant);
 
 router.get('/types', getLeaveTypes);
-router.put('/types', authorize(ROLES.HOTEL_ADMIN), updateLeaveTypes);
+router.put('/types', authorizeRoles(ROLES.HOTEL_ADMIN), updateLeaveTypes);
 router.get('/requests', getLeaveRequests);
-router.post('/requests', authorize(
-  ROLES.HOTEL_ADMIN,
-  ROLES.RECEPTIONIST,
-  ROLES.RESTAURANT_STAFF,
-  ROLES.HOUSEKEEPING_STAFF,
-  ROLES.MAINTENANCE_STAFF
-), createLeaveRequest);
-router.patch('/requests/:id/review', authorize(ROLES.HOTEL_ADMIN), reviewLeaveRequest);
+router.post('/requests', authorize(ROLES.HOTEL_ADMIN, ...HOTEL_STAFF_ROLES), createLeaveRequest);
+router.patch('/requests/:id/review', authorizeRoles(ROLES.HOTEL_ADMIN), reviewLeaveRequest);
 router.post('/requests/:id/cancel', cancelLeaveRequest);
 
 export default router;

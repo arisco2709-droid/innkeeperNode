@@ -6,6 +6,7 @@ const goodsReceiptLineSchema = new mongoose.Schema({
   acceptedQuantity: { type: Number, required: true, min: 0 },
   damagedQuantity: { type: Number, required: true, min: 0, default: 0 },
   rejectedQuantity: { type: Number, required: true, min: 0, default: 0 },
+  inspectionPendingQuantity: { type: Number, min: 0, default: 0 },
   unit: { type: String, trim: true, default: '' },
   unitId: { type: mongoose.Schema.Types.ObjectId, ref: 'Unit', default: null },
   purchasePackageId: { type: mongoose.Schema.Types.ObjectId, default: null },
@@ -38,7 +39,24 @@ const goodsReceiptSchema = new mongoose.Schema({
   purchaseTaxAmount: { type: Number, min: 0, default: 0 },
   receivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   receivedAt: { type: Date, default: Date.now },
-  notes: { type: String, trim: true, default: '' }
+  notes: { type: String, trim: true, default: '' },
+  inspectionStatus: {
+    type: String,
+    enum: ['not_required', 'pending', 'partially_inspected', 'completed'],
+    default: 'not_required',
+    index: true
+  },
+  supplierChallanNumber: { type: String, trim: true, default: '' },
+  vehicleNumber: { type: String, trim: true, default: '' },
+  inspection: {
+    materialCondition: { type: String, trim: true, default: '' },
+    freshness: { type: String, trim: true, default: '' },
+    packagingCondition: { type: String, trim: true, default: '' },
+    temperatureCelsius: { type: Number, default: null },
+    remarks: { type: String, trim: true, default: '' },
+    inspectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    inspectedAt: { type: Date, default: null }
+  }
 }, { timestamps: true });
 
 goodsReceiptSchema.index({ hotelId: 1, propertyId: 1, receiptNumber: 1 }, { unique: true });

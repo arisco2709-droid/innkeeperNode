@@ -78,6 +78,33 @@ const getMenuItemTaxPercent = (body) => {
     : null;
 };
 
+const validateMenuItemDiscount = (discount, currentItem = null) => {
+  const discountType = discount.discountType ?? currentItem?.discountType ?? 'none';
+  const discountValue = discount.discountValue ?? currentItem?.discountValue ?? 0;
+  if (!['none', 'percentage', 'flat'].includes(discountType)) {
+    return 'Discount type must be none, percentage, or flat.';
+  }
+  if (!Number.isFinite(Number(discountValue)) || Number(discountValue) < 0) {
+    return 'Discount value must be a non-negative number.';
+  }
+  if (discountType === 'percentage' && Number(discountValue) > 100) {
+    return 'Percentage discount cannot exceed 100%.';
+  }
+  return null;
+};
+
+const getMenuItemDiscountAmount = (menuItem, unitPrice, quantity) => {
+  const discountType = menuItem.discountType || 'none';
+  const discountValue = Number(menuItem.discountValue || 0);
+  if (discountType === 'percentage') {
+    return Math.round(unitPrice * quantity * (discountValue / 100) * 100) / 100;
+  }
+  if (discountType === 'flat') {
+    return Math.round(Math.min(unitPrice, discountValue) * quantity * 100) / 100;
+  }
+  return 0;
+};
+
 export const getTables = async (req, res, next) => {
   try {
     const propertyId = await resolveRestaurantProperty(req, res);
@@ -320,6 +347,10 @@ export const createMenuItem = async (req, res, next) => {
     if (pricingError) {
       return res.status(400).json({ success: false, message: pricingError });
     }
+    const discountError = validateMenuItemDiscount(req.body);
+    if (discountError) {
+      return res.status(400).json({ success: false, message: discountError });
+    }
     const legacyPrice = req.body.nonAcPrice ?? req.body.price ?? req.body.acPrice ?? 0;
     const item = await MenuItem.create({
       ...req.body,
@@ -347,6 +378,10 @@ export const updateMenuItem = async (req, res, next) => {
     const pricingError = validateMenuItemPricing(req.body, currentItem);
     if (pricingError) {
       return res.status(400).json({ success: false, message: pricingError });
+    }
+    const discountError = validateMenuItemDiscount(req.body, currentItem);
+    if (discountError) {
+      return res.status(400).json({ success: false, message: discountError });
     }
     const updates = { ...req.body };
     delete updates.taxRate;
@@ -502,8 +537,19 @@ const appendItemsToOpenTableOrder = async ({ req, propertyId, table, orderItems,
     const startLineIndex = existing.items.length;
     const items = [...existing.items.map((item) => item.toObject()), ...orderItems];
     const subtotal = Math.round(items.reduce((sum, item) => sum + item.amount, 0) * 100) / 100;
+    const addedMenuDiscount = Math.round(orderItems.reduce(
+      (sum, item) => sum + Number(item.menuDiscountAmount || 0), 0
+    ) * 100) / 100;
+    const discountAmount = Math.round((Number(existing.discountAmount || 0) + addedMenuDiscount) * 100) / 100;
     const taxAmount = Math.round(subtotal * 0.05 * 100) / 100;
-    const totalAmount = Math.round((subtotal - (existing.discountAmount || 0) + taxAmount) * 100) / 100;
+    const existingMenuDiscount = Math.round(existing.items.reduce(
+      (sum, item) => sum + Number(item.menuDiscountAmount || 0), 0
+    ) * 100) / 100;
+    const manualDiscountAmount = Math.max(
+      0,
+      Number(existing.discountAmount || 0) - existingMenuDiscount
+    );
+    const totalAmount = Math.round((subtotal - discountAmount + taxAmount) * 100) / 100;
     const nextStatus = existing.status === FOOD_ORDER_STATUS.SERVED
       ? FOOD_ORDER_STATUS.PENDING
       : existing.status;
@@ -520,6 +566,8 @@ const appendItemsToOpenTableOrder = async ({ req, propertyId, table, orderItems,
         items,
         subtotal,
         taxAmount,
+        discountAmount,
+        manualDiscountAmount,
         totalAmount,
         status: nextStatus,
         preparedFoodDeductedAt: null
@@ -617,6 +665,7 @@ export const createOrder = async (req, res, next) => {
     }
 
     let subtotal = 0;
+    let menuDiscountTotal = 0;
     const orderItems = [];
     const batchRecipes = await InventoryRecipe.find({
       hotelId: req.hotelId,
@@ -641,8 +690,10 @@ export const createOrder = async (req, res, next) => {
         });
       }
 
-      const itemTotal = unitPrice * item.quantity;
+      const itemTotal = Math.round(unitPrice * item.quantity * 100) / 100;
       subtotal += itemTotal;
+      const menuDiscountAmount = getMenuItemDiscountAmount(menuItem, unitPrice, item.quantity);
+      menuDiscountTotal += menuDiscountAmount;
 
       orderItems.push({
         menuItemId: menuItem._id,
@@ -651,6 +702,9 @@ export const createOrder = async (req, res, next) => {
         unitPrice,
         unitPriceSnapshot: unitPrice,
         diningType,
+        menuDiscountType: menuItem.discountType || 'none',
+        menuDiscountValue: Number(menuItem.discountValue || 0),
+        menuDiscountAmount,
         amount: itemTotal,
         fulfillmentSource: batchRecipeMenuItemIds.has(String(menuItem._id))
           ? 'batch_production'
@@ -660,8 +714,18 @@ export const createOrder = async (req, res, next) => {
       });
     }
 
+    const manualDiscountAmount = Number(discountAmount);
+    if (!Number.isFinite(manualDiscountAmount) || manualDiscountAmount < 0) {
+      return res.status(400).json({ success: false, message: 'Discount must be a non-negative number.' });
+    }
+    subtotal = Math.round(subtotal * 100) / 100;
+    menuDiscountTotal = Math.round(menuDiscountTotal * 100) / 100;
+    const totalDiscountAmount = Math.round((menuDiscountTotal + manualDiscountAmount) * 100) / 100;
+    if (totalDiscountAmount > subtotal) {
+      return res.status(400).json({ success: false, message: 'Discount cannot exceed the item subtotal.' });
+    }
     const taxAmount = Math.round(subtotal * 0.05 * 100) / 100; // 5% F&B tax
-    const totalAmount = Math.round((subtotal - discountAmount + taxAmount) * 100) / 100;
+    const totalAmount = Math.round((subtotal - totalDiscountAmount + taxAmount) * 100) / 100;
 
     let roomNumber = '';
     let guestName = '';
@@ -757,7 +821,8 @@ export const createOrder = async (req, res, next) => {
       items: orderItems,
       subtotal,
       taxAmount,
-      discountAmount,
+      discountAmount: totalDiscountAmount,
+      manualDiscountAmount,
       totalAmount,
       status: FOOD_ORDER_STATUS.PENDING,
       paymentStatus: 'unpaid',
@@ -951,6 +1016,12 @@ export const updateBillAmounts = async (req, res, next) => {
     if (revisedDiscount > subtotal) {
       return res.status(400).json({ success: false, message: 'Discount cannot exceed the item subtotal.' });
     }
+    const itemDiscountTotal = Math.round(updates.reduce(
+      (sum, item) => sum + Number(item.menuDiscountAmount || 0), 0
+    ) * 100) / 100;
+    if (revisedDiscount < itemDiscountTotal) {
+      return res.status(400).json({ success: false, message: 'Discount cannot be less than the menu item discounts.' });
+    }
     if (Math.abs(order.discountAmount - revisedDiscount) > 0.001) {
       modificationEntries.push({
         field: 'discountAmount', originalAmount: order.discountAmount, revisedAmount: revisedDiscount,
@@ -970,6 +1041,7 @@ export const updateBillAmounts = async (req, res, next) => {
     order.subtotal = subtotal;
     order.taxAmount = taxAmount;
     order.discountAmount = revisedDiscount;
+    order.manualDiscountAmount = Math.round((revisedDiscount - itemDiscountTotal) * 100) / 100;
     order.totalAmount = totalAmount;
     order.amountModifications = [...order.amountModifications, ...modificationEntries];
     await order.save();

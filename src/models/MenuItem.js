@@ -49,6 +49,16 @@ const menuItemSchema = new mongoose.Schema({
     type: Number,
     default: 5
   },
+  discountType: {
+    type: String,
+    enum: ['none', 'percentage', 'flat'],
+    default: 'none'
+  },
+  discountValue: {
+    type: Number,
+    min: 0,
+    default: 0
+  },
   isAvailable: {
     type: Boolean,
     default: true

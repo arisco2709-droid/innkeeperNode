@@ -2,7 +2,9 @@ import mongoose from 'mongoose';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getInventoryReport, getRecipes, saveRecipe, setRecipeStatus } from '../controllers/inventoryAdvancedController.js';
 import { getInventoryBatches } from '../controllers/inventoryController.js';
-import { createOrder, getMenu, settleOrder, updateOrderStatus } from '../controllers/restaurantController.js';
+import {
+  createMenuItem, createOrder, getMenu, settleOrder, updateMenuItem, updateOrderStatus
+} from '../controllers/restaurantController.js';
 import {
   cancelProductionEntry, createProductionEntry, getProductionDashboard, transferProductionBatch
 } from '../controllers/productionController.js';
@@ -11,7 +13,8 @@ import {
   MenuCategory, MenuItem, PreparedFoodMovement, ProductionBatch, Property, RecipeConsumption, StockMovement
 } from '../models/index.js';
 import {
-  consumePreparedFoodForOrder, consumeRecipesForOrder, postStockMovement, recordPreparedFoodUse, runInventoryTransaction
+  consumePreparedFoodForOrder, consumeRecipesForOrder, postStockMovement, recordDirectInventoryUsage,
+  recordPreparedFoodUse, runInventoryTransaction
 } from '../services/inventoryService.js';
 import { setup, teardown } from './setup.js';
 
@@ -52,6 +55,117 @@ const invoke = async (controller, req) => {
 describe('recipe-based inventory management', () => {
   beforeAll(async () => setup());
   afterAll(async () => teardown());
+
+  it('applies configured percentage and flat menu discounts and snapshots them on the bill', async () => {
+    const property = await Property.create({
+      hotelId,
+      name: 'Menu Discount Property',
+      code: `MDP${new mongoose.Types.ObjectId().toString().slice(-5)}`,
+      address: '1 Test Road',
+      city: 'Test City',
+      state: 'Test State',
+      phone: '5551234567'
+    });
+    const category = await MenuCategory.create({ hotelId, name: 'Menu Discount Items' });
+    const invalidDiscount = await invoke(createMenuItem, requestFor({
+      body: {
+        categoryId: category._id,
+        name: 'Invalid Percentage Discount',
+        price: 100,
+        discountType: 'percentage',
+        discountValue: 101
+      }
+    }));
+    expect(invalidDiscount.statusCode).toBe(400);
+
+    const percentageItemResponse = await invoke(createMenuItem, requestFor({
+      body: {
+        categoryId: category._id,
+        name: 'Percentage Discount Dish',
+        price: 100,
+        nonAcPrice: 100,
+        nonAcPricingEnabled: true,
+        acPrice: 120,
+        acPricingEnabled: true,
+        discountType: 'percentage',
+        discountValue: 10
+      }
+    }));
+    const flatItemResponse = await invoke(createMenuItem, requestFor({
+      body: {
+        categoryId: category._id,
+        name: 'Flat Discount Dish',
+        price: 100,
+        nonAcPrice: 100,
+        nonAcPricingEnabled: true,
+        acPrice: 100,
+        acPricingEnabled: true,
+        discountType: 'flat',
+        discountValue: 15
+      }
+    }));
+    expect(percentageItemResponse.statusCode).toBe(201);
+    expect(flatItemResponse.statusCode).toBe(201);
+
+    const orderResponse = await invoke(createOrder, requestFor({
+      propertyId: property._id,
+      body: {
+        orderType: 'takeaway',
+        diningType: 'ac',
+        discountAmount: 5,
+        items: [
+          { menuItemId: percentageItemResponse.body.data._id, quantity: 2 },
+          { menuItemId: flatItemResponse.body.data._id, quantity: 1 }
+        ]
+      }
+    }));
+
+    expect(orderResponse.statusCode).toBe(201);
+    expect(orderResponse.body.data.items.map((item) => item.menuDiscountAmount)).toEqual([24, 15]);
+    expect(orderResponse.body.data.items[0]).toMatchObject({
+      unitPrice: 120,
+      unitPriceSnapshot: 120,
+      diningType: 'ac',
+      menuDiscountType: 'percentage',
+      menuDiscountValue: 10,
+      amount: 240
+    });
+    expect(orderResponse.body.data.items[1]).toMatchObject({
+      menuDiscountType: 'flat',
+      menuDiscountValue: 15,
+      menuDiscountAmount: 15,
+      amount: 100
+    });
+    expect(orderResponse.body.data).toMatchObject({
+      subtotal: 340,
+      discountAmount: 44,
+      manualDiscountAmount: 5,
+      taxAmount: 17,
+      totalAmount: 313
+    });
+
+    await invoke(updateMenuItem, requestFor({
+      params: { id: String(percentageItemResponse.body.data._id) },
+      body: {
+        price: 200,
+        nonAcPrice: 200,
+        nonAcPricingEnabled: true,
+        acPrice: 220,
+        acPricingEnabled: true,
+        discountType: 'flat',
+        discountValue: 50
+      }
+    }));
+    const historicalOrder = await FoodOrder.findById(orderResponse.body.data._id).lean();
+    expect(historicalOrder.items[0]).toMatchObject({
+      unitPriceSnapshot: 120,
+      menuDiscountType: 'percentage',
+      menuDiscountValue: 10,
+      menuDiscountAmount: 24
+    });
+    expect(historicalOrder.discountAmount).toBe(44);
+    expect(historicalOrder.totalAmount).toBe(313);
+  });
 
   it('deducts recipe ingredients at the configured stage, uses FEFO batches, and reverses cancellation', async () => {
     const property = await Property.create({
@@ -815,6 +929,125 @@ describe('recipe-based inventory management', () => {
       unrecordedFoodCost: 0.22,
       availableQuantity: 13
     });
+  });
+
+  it('records complimentary raw materials and unrecorded made-to-order menu usage with idempotent stock deductions', async () => {
+      const property = await Property.create({
+        hotelId,
+        name: 'Direct Usage Property',
+        code: `DUP${new mongoose.Types.ObjectId().toString().slice(-5)}`,
+        address: '1 Test Road',
+        city: 'Test City',
+        state: 'Test State',
+        phone: '5551234567'
+      });
+      const category = await MenuCategory.create({ hotelId, name: 'Direct Usage' });
+      const menuItem = await MenuItem.create({
+        hotelId,
+        categoryId: category._id,
+        name: 'Made-to-order usage dish',
+        price: 20
+      });
+      const ingredient = await InventoryItem.create({
+        hotelId,
+        propertyId: property._id,
+        name: 'Direct Usage Ingredient',
+        code: `DUI${new mongoose.Types.ObjectId().toString().slice(-5)}`,
+        inventoryType: 'raw_material',
+        unit: 'kg',
+        baseUnit: 'kg',
+        currentStock: 0,
+        unitCost: 10
+      });
+      await runInventoryTransaction((session) => postStockMovement({
+        hotelId,
+        propertyId: property._id,
+        itemId: ingredient._id,
+        movementType: 'receipt',
+        quantity: 10,
+        unit: 'kg',
+        unitCost: 10,
+        location: 'Main Store',
+        recordedBy: actorId,
+        session
+      }));
+      const recipe = await InventoryRecipe.create({
+        hotelId,
+        propertyId: property._id,
+        menuItemId: menuItem._id,
+        recipeName: 'Made-to-order usage recipe',
+        servingSize: 'portion',
+        location: 'Main Store',
+        expectedProductionYield: 4,
+        productionMode: 'made_to_order',
+        version: 1,
+        ingredients: [{
+          itemId: ingredient._id,
+          quantity: 2,
+          unit: 'kg',
+          conversionFactor: 1
+        }],
+        createdBy: actorId
+      });
+      const rawUsageKey = `direct-raw:${new mongoose.Types.ObjectId()}`;
+      const rawUsage = await runInventoryTransaction((session) => recordDirectInventoryUsage({
+        hotelId,
+        propertyId: property._id,
+        targetType: 'raw_material',
+        targetId: ingredient._id,
+        usageType: 'complimentary',
+        quantity: 1,
+        reason: 'Complimentary kitchen use',
+        recordedBy: actorId,
+        idempotencyKey: rawUsageKey,
+        session
+      }));
+      const duplicateRawUsage = await runInventoryTransaction((session) => recordDirectInventoryUsage({
+        hotelId,
+        propertyId: property._id,
+        targetType: 'raw_material',
+        targetId: ingredient._id,
+        usageType: 'complimentary',
+        quantity: 1,
+        reason: 'Complimentary kitchen use',
+        recordedBy: actorId,
+        idempotencyKey: rawUsageKey,
+        session
+      }));
+      const menuUsage = await runInventoryTransaction((session) => recordDirectInventoryUsage({
+        hotelId,
+        propertyId: property._id,
+        targetType: 'menu_item',
+        targetId: recipe._id,
+        usageType: 'unrecorded_consumption',
+        quantity: 2,
+        reason: 'Unrecorded staff meal',
+        recordedBy: actorId,
+        idempotencyKey: `direct-menu:${new mongoose.Types.ObjectId()}`,
+        session
+      }));
+
+      expect(rawUsage).toMatchObject({ duplicate: false, totalCost: 10 });
+      expect(duplicateRawUsage.duplicate).toBe(true);
+      expect(menuUsage).toMatchObject({ duplicate: false, totalCost: 10 });
+      expect(menuUsage.usage).toMatchObject({
+        usageType: 'unrecorded_consumption',
+        targetType: 'menu_item',
+        targetName: menuItem.name,
+        targetQuantity: 2,
+        targetUnit: 'portion'
+      });
+      expect(menuUsage.movements[0]).toMatchObject({
+        quantity: 1,
+        totalValue: 10,
+        metadata: { source: 'manual_unrecorded_usage' }
+      });
+      expect((await InventoryItem.findById(ingredient._id)).currentStock).toBe(8);
+      expect(await StockMovement.countDocuments({
+        hotelId,
+        propertyId: property._id,
+        'metadata.directUsage.usageId': rawUsageKey
+      })).toBe(1);
   });
 
   it('deducts exact recipe ingredient quantities and ignores expected preparation loss for raw materials', async () => {

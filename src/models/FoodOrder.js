@@ -29,6 +29,21 @@ const orderItemSchema = new mongoose.Schema({
     enum: ['ac', 'non_ac'],
     default: 'non_ac'
   },
+  menuDiscountType: {
+    type: String,
+    enum: ['none', 'percentage', 'flat'],
+    default: 'none'
+  },
+  menuDiscountValue: {
+    type: Number,
+    min: 0,
+    default: 0
+  },
+  menuDiscountAmount: {
+    type: Number,
+    min: 0,
+    default: 0
+  },
   amount: {
     type: Number,
     required: true
@@ -145,6 +160,11 @@ const foodOrderSchema = new mongoose.Schema({
   },
   discountAmount: {
     type: Number,
+    default: 0
+  },
+  manualDiscountAmount: {
+    type: Number,
+    min: 0,
     default: 0
   },
   totalAmount: {
