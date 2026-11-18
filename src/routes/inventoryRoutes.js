@@ -56,6 +56,7 @@ import {
   createStockVerification,
   getStockVerifications,
   getInventorySettings,
+  getRecipeIngredientBatchDetails,
   updateInventorySettings,
   reviewDepartmentRequest,
   saveRecipe,
@@ -198,6 +199,7 @@ router.post('/department-requests', createDepartmentRequest);
 router.patch('/department-requests/:id/review', reviewDepartmentRequest);
 
 router.get('/recipes', getRecipes);
+router.get('/recipes/:id/ingredient-batches', getRecipeIngredientBatchDetails);
 router.post('/recipes', authorize(), saveRecipe);
 router.patch('/recipes/:id/status', authorize(), setRecipeStatus);
 router.get('/production', getProductionDashboard);

@@ -2003,7 +2003,7 @@ describe('raw material inventory workflow', () => {
       consumptionQuantity: 1000,
       consumptionUnit: 'g',
       consumptionReason: 'Used for staff meals',
-      department: 'Restaurant',
+      department: 'Events Catering',
       wastageQuantity: 1,
       wastageUnit: 'kg',
       wastageReason: 'Spoiled during storage'
@@ -2024,7 +2024,7 @@ describe('raw material inventory workflow', () => {
     expect(response.body.data.verification.actualStock).toBe(2);
     expect(response.body.data.verification.consumptionQuantity).toBe(1);
     expect(response.body.data.verification.consumptionReason).toBe('Used for staff meals');
-    expect(response.body.data.verification.department).toBe('Restaurant');
+    expect(response.body.data.verification.department).toBe('Events Catering');
     expect(response.body.data.verification.wastageReason).toBe('Spoiled during storage');
     expect(response.body.data.verification.discrepancyQuantity).toBe(3);
     expect(response.body.data.verification.discrepancyReason).toBe('');
@@ -2032,7 +2032,7 @@ describe('raw material inventory workflow', () => {
     expect(await InventoryItem.findById(item._id).then((entry) => entry.currentStock)).toBe(2);
     const consumptionMovement = await StockMovement.findOne({ itemId: item._id, movementType: 'issue' });
     expect(consumptionMovement.notes).toContain('Used for staff meals');
-    expect(consumptionMovement.department).toBe('Restaurant');
+    expect(consumptionMovement.department).toBe('Events Catering');
     expect(consumptionMovement.metadata.source).toBe('stock_verification_unrecorded_consumption');
     expect(await StockMovement.findOne({ itemId: item._id, movementType: 'wastage' }).then((movement) => movement.notes))
       .toContain('Spoiled during storage');
@@ -2072,7 +2072,7 @@ describe('raw material inventory workflow', () => {
       2
     );
     expect(dashboard.body.data.unrecordedPreparedFoodQuantityThisMonth).toBe(1);
-    expect(dashboard.body.data.departmentConsumption.find((entry) => entry._id === 'Restaurant').expense)
+    expect(dashboard.body.data.departmentConsumption.find((entry) => entry._id === 'Events Catering').expense)
       .toBeGreaterThan(0);
     expect(dashboard.body.data.movementTrend.reduce((sum, entry) => sum + entry.incoming, 0)).toBeGreaterThan(0);
     expect(dashboard.body.data.movementTrend.reduce((sum, entry) => sum + entry.wastage, 0)).toBeGreaterThan(0);

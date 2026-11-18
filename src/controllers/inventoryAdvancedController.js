@@ -531,10 +531,12 @@ export const createStockVerification = async (req, res, next) => {
     if (numbers.some((value) => !Number.isFinite(value) || value < 0)) {
       return res.status(400).json({ success: false, message: 'Stock and reconciliation quantities must be non-negative numbers.' });
     }
-    const departments = ['Kitchen', 'Restaurant', 'Production', 'Housekeeping', 'Maintenance', 'Minibar'];
-    if ((numbers[1] > 0 && !departments.includes(department))
-      || (department && !departments.includes(department))) {
-      return res.status(400).json({ success: false, message: 'Select a supported department for unrecorded consumption.' });
+    const consumptionDepartment = String(department || '').trim();
+    if (numbers[1] > 0 && !consumptionDepartment) {
+      return res.status(400).json({ success: false, message: 'Enter the department responsible for unrecorded consumption.' });
+    }
+    if (consumptionDepartment.length > 120) {
+      return res.status(400).json({ success: false, message: 'Department name must be 120 characters or fewer.' });
     }
     const idempotencyKey = req.body.idempotencyKey || req.get('Idempotency-Key');
     const result = await runInventoryTransaction(async (session) => {
@@ -598,7 +600,7 @@ export const createStockVerification = async (req, res, next) => {
         actualStock: convertedActual.quantity,
         consumptionQuantity: convertedConsumption.quantity,
         consumptionReason: String(consumptionReason).trim(),
-        department: convertedConsumption.quantity > 0 ? department : '',
+        department: convertedConsumption.quantity > 0 ? consumptionDepartment : '',
         wastageQuantity: convertedWastage.quantity,
         wastageReason: String(wastageReason).trim(),
         discrepancyQuantity,
@@ -615,7 +617,7 @@ export const createStockVerification = async (req, res, next) => {
           hotelId: req.hotelId, propertyId: req.propertyId, itemId: item._id,
           movementType: 'issue', quantity: convertedConsumption.quantity, unit: item.baseUnit || item.unit,
           location: selectedLocation, locationId: storageLocation._id, referenceNumber: `VER-${verification._id}`,
-          department,
+          department: consumptionDepartment,
           notes: [
             'Physical verification consumption.',
             String(consumptionReason).trim(),
@@ -1562,6 +1564,151 @@ export const getRecipes = async (req, res, next) => {
   }
 };
 
+export const getRecipeIngredientBatchDetails = async (req, res, next) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Choose a valid recipe.' });
+    }
+    const recipe = await InventoryRecipe.findOne({
+      _id: req.params.id,
+      ...tenantFilter(req)
+    })
+      .populate('ingredients.itemId', 'name unit baseUnit unitCost trackExpiry trackBatchNumber')
+      .lean();
+    if (!recipe) {
+      return res.status(404).json({ success: false, message: 'Recipe not found.' });
+    }
+
+    const itemIds = recipe.ingredients
+      .map((ingredient) => ingredient.itemId?._id)
+      .filter(Boolean);
+    const batches = await InventoryBatch.find({
+      ...tenantFilter(req),
+      itemId: { $in: itemIds },
+      $or: [
+        ...(recipe.locationId ? [{ locationId: recipe.locationId }] : []),
+        { locationId: null, location: recipe.location || 'Restaurant Store' }
+      ]
+    })
+      .populate('vendorId', 'name')
+      .select('itemId location batchNumber quantity remainingQuantity unitCost purchaseQuantity purchaseUnit purchaseUnitCost purchaseAmount receivedAt expiryDate vendorId')
+      .sort({ receivedAt: 1, _id: 1 })
+      .lean();
+    const batchesByItem = new Map();
+    batches.forEach((batch) => {
+      const key = String(batch.itemId);
+      const itemBatches = batchesByItem.get(key) || [];
+      itemBatches.push(batch);
+      batchesByItem.set(key, itemBatches);
+    });
+    const now = new Date();
+    const details = recipe.ingredients.map((ingredient) => {
+      const item = ingredient.itemId;
+      if (!item) {
+        return {
+          itemId: String(ingredient.itemId || ''),
+          itemName: 'Unknown inventory item',
+          optional: Boolean(ingredient.optional),
+          recipeQuantity: Number(ingredient.quantity) || 0,
+          unit: ingredient.unit,
+          allocations: [],
+          legacyAllocation: null,
+          shortageQuantity: 0
+        };
+      }
+
+      const itemBatches = batchesByItem.get(String(item._id)) || [];
+      const hasExpiryBatches = itemBatches.some((batch) => batch.expiryDate);
+      const expiryTracked = item.trackExpiry || hasExpiryBatches;
+      const eligibleBatches = itemBatches
+        .filter((batch) => Number(batch.remainingQuantity) > 0
+          && (!expiryTracked || !batch.expiryDate || new Date(batch.expiryDate) > now))
+        .sort((left, right) => {
+          if (expiryTracked) {
+            const leftExpiry = left.expiryDate ? new Date(left.expiryDate).getTime() : Number.POSITIVE_INFINITY;
+            const rightExpiry = right.expiryDate ? new Date(right.expiryDate).getTime() : Number.POSITIVE_INFINITY;
+            if (leftExpiry !== rightExpiry) return leftExpiry - rightExpiry;
+          }
+          return new Date(left.receivedAt).getTime() - new Date(right.receivedAt).getTime()
+            || String(left._id).localeCompare(String(right._id));
+        });
+      const quantityPerYield = Number(ingredient.quantity) || 0;
+      const requiredQuantity = ingredient.optional
+        ? 0
+        : recipe.productionMode === 'batch_production'
+          ? quantityPerYield
+          : quantityPerYield / (Number(recipe.expectedProductionYield) || 1);
+      const conversionFactor = Number(ingredient.conversionFactor) > 0
+        ? Number(ingredient.conversionFactor)
+        : 1;
+      let requiredBaseQuantity = requiredQuantity * conversionFactor;
+      const allocations = [];
+      for (const batch of eligibleBatches) {
+        if (requiredBaseQuantity <= 0) break;
+        const quantity = Math.min(Number(batch.remainingQuantity), requiredBaseQuantity);
+        if (quantity <= 0) continue;
+        const unitCost = Number(batch.unitCost) || 0;
+        allocations.push({
+          batchId: String(batch._id),
+          batchNumber: batch.batchNumber || '',
+          location: batch.location,
+          receivedAt: batch.receivedAt,
+          expiryDate: batch.expiryDate,
+          availableQuantity: Number(batch.remainingQuantity) || 0,
+          purchasedBaseQuantity: Number(batch.quantity) || 0,
+          quantityUsed: quantity,
+          unitCost,
+          totalCost: Math.round((quantity * unitCost + Number.EPSILON) * 100) / 100,
+          purchaseQuantity: batch.purchaseQuantity,
+          purchaseUnit: batch.purchaseUnit || '',
+          purchaseUnitCost: batch.purchaseUnitCost,
+          purchaseAmount: batch.purchaseAmount,
+          vendorName: batch.vendorId?.name || ''
+        });
+        requiredBaseQuantity = Math.max(0, requiredBaseQuantity - quantity);
+      }
+
+      let legacyAllocation = null;
+      const isBatchConstrained = item.trackExpiry || item.trackBatchNumber || hasExpiryBatches;
+      if (requiredBaseQuantity > 0 && !isBatchConstrained) {
+        const unitCost = Number(item.unitCost) || 0;
+        legacyAllocation = {
+          quantityUsed: requiredBaseQuantity,
+          unitCost,
+          totalCost: Math.round((requiredBaseQuantity * unitCost + Number.EPSILON) * 100) / 100
+        };
+        requiredBaseQuantity = 0;
+      }
+
+      return {
+        itemId: String(item._id),
+        itemName: item.name,
+        optional: Boolean(ingredient.optional),
+        recipeQuantity: quantityPerYield,
+        requiredQuantity,
+        unit: ingredient.unit || item.baseUnit || item.unit,
+        baseUnit: item.baseUnit || item.unit,
+        conversionFactor,
+        allocations,
+        legacyAllocation,
+        shortageQuantity: Math.max(0, requiredBaseQuantity)
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        location: recipe.location || 'Restaurant Store',
+        productionMode: recipe.productionMode,
+        expectedProductionYield: recipe.expectedProductionYield,
+        ingredients: details
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 export const saveRecipe = async (req, res, next) => {
   try {
     if (!['hotel_admin', 'super_admin'].includes(req.user?.role)) {
@@ -1623,7 +1770,7 @@ export const saveRecipe = async (req, res, next) => {
         hotelId: req.hotelId, locationId, locationName: location, session
       });
       const previous = await InventoryRecipe.findOne({
-        ...tenantFilter(req), menuItemId, isActive: true
+        ...tenantFilter(req), menuItemId, productionMode, isActive: true
       }).sort({ version: -1 }).session(session);
       if (previous) {
         previous.isActive = false;
@@ -1688,6 +1835,7 @@ export const setRecipeStatus = async (req, res, next) => {
         await InventoryRecipe.updateMany({
           ...tenantFilter(req),
           menuItemId: current.menuItemId,
+          productionMode: current.productionMode,
           _id: { $ne: current._id },
           isActive: true
         }, { $set: { isActive: false } }, { session });

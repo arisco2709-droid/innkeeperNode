@@ -1,6 +1,12 @@
 import mongoose from 'mongoose';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { getInventoryReport, getRecipes, saveRecipe, setRecipeStatus } from '../controllers/inventoryAdvancedController.js';
+import {
+  getInventoryReport,
+  getRecipeIngredientBatchDetails,
+  getRecipes,
+  saveRecipe,
+  setRecipeStatus
+} from '../controllers/inventoryAdvancedController.js';
 import { getInventoryBatches } from '../controllers/inventoryController.js';
 import {
   createMenuItem, createOrder, getMenu, settleOrder, updateMenuItem, updateOrderStatus
@@ -55,6 +61,237 @@ const invoke = async (controller, req) => {
 describe('recipe-based inventory management', () => {
   beforeAll(async () => setup());
   afterAll(async () => teardown());
+
+  it('keeps individual and bulk recipe activation separate for the same menu item', async () => {
+    const property = await Property.create({
+      hotelId,
+      name: 'Separate Recipe Modes Property',
+      code: `SRM${new mongoose.Types.ObjectId().toString().slice(-5)}`,
+      address: '1 Test Road',
+      city: 'Test City',
+      state: 'Test State',
+      phone: '5551234567'
+    });
+    const category = await MenuCategory.create({ hotelId, name: 'Separate Recipe Modes' });
+    const menuItem = await MenuItem.create({
+      hotelId,
+      categoryId: category._id,
+      name: 'Individually Served and Bulk Dish',
+      price: 10
+    });
+    const ingredient = await InventoryItem.create({
+      hotelId,
+      propertyId: property._id,
+      name: 'Separate Mode Ingredient',
+      code: `SMI${new mongoose.Types.ObjectId().toString().slice(-5)}`,
+      inventoryType: 'raw_material',
+      unit: 'kg',
+      baseUnit: 'kg',
+      currentStock: 10
+    });
+    const saveModeRecipe = (productionMode, recipeName) => invoke(saveRecipe, requestFor({
+      propertyId: property._id,
+      body: {
+        menuItemId: String(menuItem._id),
+        recipeName,
+        productionMode,
+        expectedProductionYield: productionMode === 'batch_production' ? 10 : 1,
+        ingredients: [{ itemId: String(ingredient._id), quantity: 1, unit: 'kg' }]
+      }
+    }));
+
+    const individualRecipeResponse = await saveModeRecipe('made_to_order', 'Individual Recipe');
+    const firstBulkRecipeResponse = await saveModeRecipe('batch_production', 'Bulk Recipe');
+    expect(individualRecipeResponse.statusCode).toBe(201);
+    expect(firstBulkRecipeResponse.statusCode).toBe(201);
+
+    let activeRecipes = await InventoryRecipe.find({
+      menuItemId: menuItem._id,
+      isActive: true
+    }).lean();
+    expect(activeRecipes.map((recipe) => recipe.productionMode).sort()).toEqual([
+      'batch_production',
+      'made_to_order'
+    ]);
+
+    const secondBulkRecipeResponse = await saveModeRecipe('batch_production', 'Updated Bulk Recipe');
+    expect(secondBulkRecipeResponse.statusCode).toBe(201);
+    activeRecipes = await InventoryRecipe.find({
+      menuItemId: menuItem._id,
+      isActive: true
+    }).lean();
+    expect(activeRecipes.map((recipe) => recipe.productionMode).sort()).toEqual([
+      'batch_production',
+      'made_to_order'
+    ]);
+    expect(activeRecipes.map((recipe) => recipe.recipeName).sort()).toEqual([
+      'Individual Recipe',
+      'Updated Bulk Recipe'
+    ]);
+
+    const reactivatedIndividual = await invoke(setRecipeStatus, requestFor({
+      propertyId: property._id,
+      params: { id: String(individualRecipeResponse.body.data._id) },
+      body: { isActive: true }
+    }));
+    expect(reactivatedIndividual.statusCode).toBe(200);
+    activeRecipes = await InventoryRecipe.find({
+      menuItemId: menuItem._id,
+      isActive: true
+    }).lean();
+    expect(activeRecipes.map((recipe) => recipe.productionMode).sort()).toEqual([
+      'batch_production',
+      'made_to_order'
+    ]);
+  });
+
+  it('previews recipe ingredient usage from current batches and includes purchase details', async () => {
+    const property = await Property.create({
+      hotelId,
+      name: 'Recipe Batch Detail Property',
+      code: `RBD${new mongoose.Types.ObjectId().toString().slice(-5)}`,
+      address: '1 Test Road',
+      city: 'Test City',
+      state: 'Test State',
+      phone: '5551234567'
+    });
+    const category = await MenuCategory.create({ hotelId, name: 'Recipe Batch Details' });
+    const menuItem = await MenuItem.create({
+      hotelId,
+      categoryId: category._id,
+      name: 'Batch Detail Dish',
+      price: 12
+    });
+    const ingredient = await InventoryItem.create({
+      hotelId,
+      propertyId: property._id,
+      name: 'Batch Detail Flour',
+      code: `BDF${new mongoose.Types.ObjectId().toString().slice(-5)}`,
+      inventoryType: 'raw_material',
+      unit: 'kg',
+      baseUnit: 'kg',
+      unitCost: 6,
+      currentStock: 7
+    });
+    const recipe = await InventoryRecipe.create({
+      hotelId,
+      propertyId: property._id,
+      menuItemId: menuItem._id,
+      location: 'Kitchen Store',
+      productionMode: 'made_to_order',
+      expectedProductionYield: 2,
+      version: 1,
+      ingredients: [{
+        itemId: ingredient._id,
+        quantity: 6,
+        unit: 'kg',
+        conversionFactor: 1,
+        baseUnit: 'kg'
+      }],
+      createdBy: actorId
+    });
+    await InventoryBatch.create([
+      {
+        hotelId,
+        propertyId: property._id,
+        itemId: ingredient._id,
+        location: 'Kitchen Store',
+        batchNumber: 'FLOUR-001',
+        quantity: 2,
+        remainingQuantity: 2,
+        unitCost: 4,
+        purchaseQuantity: 1,
+        purchaseUnit: 'bag',
+        purchaseUnitCost: 8,
+        purchaseAmount: 8,
+        receivedAt: new Date('2026-01-01T00:00:00.000Z')
+      },
+      {
+        hotelId,
+        propertyId: property._id,
+        itemId: ingredient._id,
+        location: 'Kitchen Store',
+        batchNumber: 'FLOUR-002',
+        quantity: 5,
+        remainingQuantity: 5,
+        unitCost: 5,
+        purchaseQuantity: 2,
+        purchaseUnit: 'bag',
+        purchaseUnitCost: 12.5,
+        purchaseAmount: 25,
+        receivedAt: new Date('2026-02-01T00:00:00.000Z')
+      }
+    ]);
+
+    const response = await invoke(getRecipeIngredientBatchDetails, requestFor({
+      propertyId: property._id,
+      params: { id: String(recipe._id) }
+    }));
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body.data.ingredients[0]).toMatchObject({
+      itemName: ingredient.name,
+      recipeQuantity: 6,
+      requiredQuantity: 3,
+      unit: 'kg',
+      baseUnit: 'kg',
+      allocations: [
+        {
+          batchNumber: 'FLOUR-001',
+          quantityUsed: 2,
+          unitCost: 4,
+          totalCost: 8,
+          purchaseQuantity: 1,
+          purchaseUnit: 'bag',
+          purchaseUnitCost: 8,
+          purchaseAmount: 8
+        },
+        {
+          batchNumber: 'FLOUR-002',
+          quantityUsed: 1,
+          unitCost: 5,
+          totalCost: 5,
+          purchaseQuantity: 2,
+          purchaseUnit: 'bag',
+          purchaseUnitCost: 12.5,
+          purchaseAmount: 25
+        }
+      ],
+      legacyAllocation: null,
+      shortageQuantity: 0
+    });
+
+    const bulkRecipe = await InventoryRecipe.create({
+      hotelId,
+      propertyId: property._id,
+      menuItemId: menuItem._id,
+      location: 'Kitchen Store',
+      productionMode: 'batch_production',
+      expectedProductionYield: 10,
+      version: 2,
+      ingredients: [{
+        itemId: ingredient._id,
+        quantity: 6,
+        unit: 'kg',
+        conversionFactor: 1,
+        baseUnit: 'kg'
+      }],
+      createdBy: actorId
+    });
+    const bulkResponse = await invoke(getRecipeIngredientBatchDetails, requestFor({
+      propertyId: property._id,
+      params: { id: String(bulkRecipe._id) }
+    }));
+    expect(bulkResponse.body.data.ingredients[0]).toMatchObject({
+      recipeQuantity: 6,
+      requiredQuantity: 6,
+      allocations: [
+        { batchNumber: 'FLOUR-001', quantityUsed: 2 },
+        { batchNumber: 'FLOUR-002', quantityUsed: 4 }
+      ],
+      shortageQuantity: 0
+    });
+  });
 
   it('applies configured percentage and flat menu discounts and snapshots them on the bill', async () => {
     const property = await Property.create({
