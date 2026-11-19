@@ -24,6 +24,7 @@ import {
   StockMovement,
   SupplierPayment,
   SupplierReturn,
+  Unit,
   Vendor
 } from '../models/index.js';
 import { setup, teardown } from './setup.js';
@@ -66,6 +67,14 @@ describe('end-to-end procurement workflow', () => {
   afterAll(async () => teardown());
 
   it('keeps uninspected goods out of stock and reconciles inspection, invoice, credit and payment', async () => {
+    const kilogram = await Unit.create({
+      hotelId,
+      name: 'Kilogram',
+      symbol: 'kg',
+      category: 'weight',
+      createdBy: actorId,
+      updatedBy: actorId
+    });
     const item = await InventoryItem.create({
       hotelId,
       propertyId,
@@ -74,7 +83,17 @@ describe('end-to-end procurement workflow', () => {
       inventoryType: 'raw_material',
       unit: 'kg',
       baseUnit: 'kg',
+      baseUnitId: kilogram._id,
       purchaseUnit: 'kg',
+      purchaseUnitId: kilogram._id,
+      preferredPurchaseUnitId: kilogram._id,
+      supportedUnits: [{
+        unitId: kilogram._id,
+        unitNameSnapshot: kilogram.name,
+        unitSymbolSnapshot: kilogram.symbol,
+        conversionFactorToBase: 1,
+        isDefaultPurchaseUnit: true
+      }],
       currentStock: 0,
       minStockThreshold: 0,
       unitCost: 10

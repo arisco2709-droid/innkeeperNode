@@ -11,7 +11,10 @@ import {
   Vendor
 } from '../models/index.js';
 import { logAudit } from '../services/auditService.js';
-import { postStockMovement, runInventoryTransaction } from '../services/inventoryService.js';
+import {
+  postStockMovement, requireRawMaterialUnitConfiguration, resolveRawMaterialPurchaseUnit,
+  runInventoryTransaction
+} from '../services/inventoryService.js';
 import { resolveStorageLocation } from '../services/storageLocationService.js';
 import { generateReference } from '../utils/reference.js';
 
@@ -121,8 +124,9 @@ export const createPurchaseRequisition = async (req, res, next) => {
       }
       const item = await InventoryItem.findOne({
         _id: line.itemId, ...tenantFilter(req), isActive: true, inventoryType: 'raw_material'
-      }).select('name unit baseUnit currentStock');
+      }).select('name unit baseUnit baseUnitId supportedUnits currentStock');
       if (!item) throw httpError('A requested material is invalid or inactive.');
+      await requireRawMaterialUnitConfiguration({ item, hotelId: req.hotelId });
       const balance = await InventoryBalance.findOne({
         ...tenantFilter(req), itemId: item._id,
         $or: [{ locationId: location._id }, { locationId: null, location: location.locationName }]
@@ -226,7 +230,16 @@ export const createOrderFromRequisition = async (req, res, next) => {
         if (!item || !Number.isFinite(unitCost) || unitCost < 0) {
           throw httpError(`Enter a valid supplier price for ${requested.itemName}.`);
         }
+        await requireRawMaterialUnitConfiguration({ item, hotelId: req.hotelId, session });
         const baseUnit = item.baseUnit || item.unit;
+        await resolveRawMaterialPurchaseUnit({
+          item,
+          hotelId: req.hotelId,
+          purchaseUnitId: item.baseUnitId,
+          purchaseUnit: baseUnit,
+          conversionFactor: 1,
+          session
+        });
         lines.push({
           itemId: item._id,
           itemName: item.name,

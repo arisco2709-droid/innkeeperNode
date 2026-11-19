@@ -8,7 +8,7 @@ import { getInventoryBatches, receivePurchaseOrderGoods, reviewAutomaticReorder 
 import {
   AuditLog, FoodOrder, GoodsReceipt, Hotel, InventoryBalance, InventoryBatch, InventoryItem, MenuCategory, MenuItem,
   PreparedFoodMovement, ProductionBatch, PurchaseOrder, RecipeConsumption, Vendor,
-  StockAdjustment, StockMovement, StockReceiptRequest, StockVerification
+  StockAdjustment, StockMovement, StockReceiptRequest, StockVerification, Unit
 } from '../models/index.js';
 import {
   createStockReceiptRequest, recordStockMovement, reviewStockReceiptRequest
@@ -68,27 +68,70 @@ const createItem = () => InventoryItem.create({
   unitCost: 60
 });
 
-const createReorderItem = ({
+const createRawMaterialUnitConfiguration = async ({ hotelId, baseSymbol, purchaseSymbols = [baseSymbol] }) => {
+  const symbols = [...new Set([baseSymbol, ...purchaseSymbols])];
+  const units = await Promise.all(symbols.map(async (symbol) => {
+    let unit = await Unit.findOne({ hotelId, symbolKey: symbol.toLowerCase() });
+    if (!unit) {
+      unit = await Unit.create({
+        hotelId,
+        name: symbol,
+        symbol,
+        category: ['g', 'kg', 'mg'].includes(symbol) ? 'weight' : 'quantity',
+        createdBy: actorId,
+        updatedBy: actorId
+      });
+    }
+    return unit;
+  }));
+  const unitBySymbol = new Map(units.map((unit) => [unit.symbol, unit]));
+  const factors = {
+    g: { g: 1, kg: 1000, mg: 0.001 },
+    kg: { kg: 1, g: 0.001, mg: 0.000001 }
+  };
+  return {
+    baseUnitId: unitBySymbol.get(baseSymbol)._id,
+    purchaseUnitId: unitBySymbol.get(purchaseSymbols[0])._id,
+    preferredPurchaseUnitId: unitBySymbol.get(purchaseSymbols[0])._id,
+    supportedUnits: symbols.map((symbol) => ({
+      unitId: unitBySymbol.get(symbol)._id,
+      unitNameSnapshot: unitBySymbol.get(symbol).name,
+      unitSymbolSnapshot: symbol,
+      conversionFactorToBase: factors[baseSymbol]?.[symbol] ?? 1,
+      isDefaultPurchaseUnit: symbol === purchaseSymbols[0],
+      isActive: true
+    }))
+  };
+};
+
+const createReorderItem = async ({
   currentStock = 0,
   isolatedHotelId = hotelId,
   isolatedPropertyId = propertyId
-} = {}) => InventoryItem.create({
-  hotelId: isolatedHotelId,
-  propertyId: isolatedPropertyId,
-  name: `Automatic reorder item ${new mongoose.Types.ObjectId()}`,
-  code: new mongoose.Types.ObjectId().toString().slice(-8),
-  inventoryType: 'raw_material',
-  unit: 'kg',
-  baseUnit: 'kg',
-  purchaseUnit: 'kg',
-  purchaseConversionFactor: 1,
-  currentStock,
-  minStockThreshold: 5,
-  reorderLevel: 5,
-  reorderQuantity: 5,
-  maxStockLevel: 20,
-  unitCost: 2
-});
+} = {}) => {
+  const unitConfiguration = await createRawMaterialUnitConfiguration({
+    hotelId: isolatedHotelId,
+    baseSymbol: 'kg'
+  });
+  return InventoryItem.create({
+    hotelId: isolatedHotelId,
+    propertyId: isolatedPropertyId,
+    name: `Automatic reorder item ${new mongoose.Types.ObjectId()}`,
+    code: new mongoose.Types.ObjectId().toString().slice(-8),
+    inventoryType: 'raw_material',
+    unit: 'kg',
+    baseUnit: 'kg',
+    purchaseUnit: 'kg',
+    purchaseConversionFactor: 1,
+    ...unitConfiguration,
+    currentStock,
+    minStockThreshold: 5,
+    reorderLevel: 5,
+    reorderQuantity: 5,
+    maxStockLevel: 20,
+    unitCost: 2
+  });
+};
 
 describe('raw material inventory workflow', () => {
   beforeAll(async () => setup());
@@ -1541,6 +1584,11 @@ describe('raw material inventory workflow', () => {
       state: 'Test State',
       postalCode: '12345'
     });
+    const unitConfiguration = await createRawMaterialUnitConfiguration({
+      hotelId: hotel._id,
+      baseSymbol: 'g',
+      purchaseSymbols: ['kg']
+    });
     const item = await InventoryItem.create({
       hotelId: hotel._id,
       propertyId,
@@ -1552,6 +1600,7 @@ describe('raw material inventory workflow', () => {
       purchaseUnit: 'kg',
       purchaseConversionFactor: 1000,
       unitConversions: { kg: 1000 },
+      ...unitConfiguration,
       currentStock: 0,
       minStockThreshold: 0,
       unitCost: 0
@@ -1633,6 +1682,11 @@ describe('raw material inventory workflow', () => {
       state: 'Test State',
       postalCode: '12345'
     });
+    const unitConfiguration = await createRawMaterialUnitConfiguration({
+      hotelId: hotel._id,
+      baseSymbol: 'g',
+      purchaseSymbols: ['kg']
+    });
     const item = await InventoryItem.create({
       hotelId: hotel._id,
       propertyId,
@@ -1644,12 +1698,7 @@ describe('raw material inventory workflow', () => {
       purchaseUnit: 'kg',
       purchaseConversionFactor: 1000,
       unitConversions: { kg: 1000 },
-      supportedUnits: [{
-        unitId: new mongoose.Types.ObjectId(),
-        unitNameSnapshot: 'Kilogram',
-        unitSymbolSnapshot: 'kg',
-        conversionFactorToBase: 1000
-      }],
+      ...unitConfiguration,
       currentStock: 0,
       minStockThreshold: 0,
       unitCost: 0
@@ -1715,6 +1764,11 @@ describe('raw material inventory workflow', () => {
       state: 'Test State',
       postalCode: '12345'
     });
+    const unitConfiguration = await createRawMaterialUnitConfiguration({
+      hotelId: hotel._id,
+      baseSymbol: 'g',
+      purchaseSymbols: ['kg']
+    });
     const item = await InventoryItem.create({
       hotelId: hotel._id,
       propertyId,
@@ -1726,20 +1780,7 @@ describe('raw material inventory workflow', () => {
       purchaseUnit: 'kg',
       purchaseConversionFactor: 1000,
       unitConversions: { kg: 1000 },
-      supportedUnits: [
-        {
-          unitId: new mongoose.Types.ObjectId(),
-          unitNameSnapshot: 'Gram',
-          unitSymbolSnapshot: 'g',
-          conversionFactorToBase: 1
-        },
-        {
-          unitId: new mongoose.Types.ObjectId(),
-          unitNameSnapshot: 'Kilogram',
-          unitSymbolSnapshot: 'kg',
-          conversionFactorToBase: 1000
-        }
-      ],
+      ...unitConfiguration,
       currentStock: 0,
       minStockThreshold: 0,
       unitCost: 0
@@ -1874,6 +1915,11 @@ describe('raw material inventory workflow', () => {
       state: 'Test State',
       postalCode: '12345'
     });
+    const unitConfiguration = await createRawMaterialUnitConfiguration({
+      hotelId: hotel._id,
+      baseSymbol: 'kg',
+      purchaseSymbols: ['kg', 'g']
+    });
     const item = await InventoryItem.create({
       hotelId: hotel._id,
       propertyId,
@@ -1882,20 +1928,7 @@ describe('raw material inventory workflow', () => {
       inventoryType: 'raw_material',
       unit: 'kg',
       baseUnit: 'kg',
-      supportedUnits: [
-        {
-          unitId: new mongoose.Types.ObjectId(),
-          unitNameSnapshot: 'Kilogram',
-          unitSymbolSnapshot: 'kg',
-          conversionFactorToBase: 1
-        },
-        {
-          unitId: new mongoose.Types.ObjectId(),
-          unitNameSnapshot: 'Gram',
-          unitSymbolSnapshot: 'g',
-          conversionFactorToBase: 0.001
-        }
-      ],
+      ...unitConfiguration,
       unitConversions: { g: 0.001 },
       currentStock: 0,
       minStockThreshold: 0,

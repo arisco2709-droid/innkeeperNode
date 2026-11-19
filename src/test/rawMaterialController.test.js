@@ -3,7 +3,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createInventoryItem,
   createPurchaseOrder,
+  getInventoryBatches,
   recordStockMovement,
+  createStockReceiptRequest,
   receivePurchaseOrderGoods
 } from '../controllers/inventoryController.js';
 import {
@@ -16,6 +18,7 @@ import {
 } from '../controllers/rawMaterialController.js';
 import { createDefaultInventoryUnits, createInventoryUnit } from '../controllers/inventoryUnitController.js';
 import { GoodsReceipt, InventoryBatch, InventoryItem, PurchaseOrder, StockMovement, Unit, Vendor } from '../models/index.js';
+import { postStockMovement, runInventoryTransaction } from '../services/inventoryService.js';
 import { setup, teardown } from './setup.js';
 
 const hotelId = new mongoose.Types.ObjectId();
@@ -412,7 +415,8 @@ describe('raw material master API', () => {
         movementType: 'receipt',
         purchasePackageId: String(smallBag._id),
         packageQuantity: 4,
-        looseQuantity: 500
+        looseQuantity: 500,
+        purchaseUnitPrice: 100
       }
     }));
     expect(stockAdded.statusCode).toBe(201);
@@ -449,5 +453,154 @@ describe('raw material master API', () => {
     expect(directReceiptBatch.purchaseTaxAmount).toBe(10);
     expect((await InventoryItem.findById(created.body.data._id)).currentStock).toBe(75500);
     expect(await InventoryItem.countDocuments({ hotelId, propertyId, inventoryType: 'raw_material' })).toBe(2);
+  });
+
+  it('blocks unconfigured or incomplete raw-material receipts and records a converted purchase', async () => {
+    await invoke(createDefaultInventoryUnits, requestFor());
+    const units = await Unit.find({ hotelId, isActive: true });
+    const gram = units.find((unit) => unit.symbol === 'g');
+    const kilogram = units.find((unit) => unit.symbol === 'kg');
+    const category = await invoke(createRawMaterialCategory, requestFor({
+      body: { name: 'Purchase Validation Materials' }
+    }));
+    const subcategory = await invoke(createRawMaterialSubcategory, requestFor({
+      body: {
+        categoryId: String(category.body.data._id),
+        name: 'Purchase Validation Subcategory'
+      }
+    }));
+    const vendor = await Vendor.create({
+      hotelId,
+      name: 'Purchase Validation Supplier',
+      phone: '5550101'
+    });
+    const unconfigured = await InventoryItem.create({
+      hotelId,
+      propertyId,
+      name: 'Unconfigured rice',
+      code: `UR-${new mongoose.Types.ObjectId().toString().slice(-6)}`,
+      inventoryType: 'raw_material',
+      unit: 'g',
+      baseUnit: '',
+      baseUnitId: null,
+      currentStock: 0
+    });
+    const rejectedOrder = await invoke(createPurchaseOrder, requestFor({
+      body: {
+        vendorId: String(vendor._id),
+        items: [{ itemId: String(unconfigured._id), unit: 'kg', quantity: 5, unitCost: 100 }]
+      }
+    }));
+    expect(rejectedOrder.statusCode).toBe(400);
+    expect(rejectedOrder.body.message).toBe(
+      'Base unit is not configured for this raw material. Please configure the base unit before adding stock.'
+    );
+
+    const rejectedReceipt = await invoke(createStockReceiptRequest, requestFor({
+      body: {
+        itemId: String(unconfigured._id),
+        quantity: 5,
+        unit: 'kg',
+        purchaseUnitPrice: 100
+      }
+    }));
+    expect(rejectedReceipt.statusCode).toBe(400);
+    expect(rejectedReceipt.body.message).toBe(rejectedOrder.body.message);
+    await InventoryBatch.create({
+      hotelId,
+      propertyId,
+      itemId: unconfigured._id,
+      location: 'Main Store',
+      quantity: 5,
+      remainingQuantity: 5,
+      unitCost: 1
+    });
+    const legacyBatches = await invoke(getInventoryBatches, requestFor({
+      query: { itemId: String(unconfigured._id) }
+    }));
+    expect(legacyBatches.body.data[0]).toMatchObject({
+      dataIntegrityStatus: 'configuration_required',
+      dataIntegrityMessage: rejectedOrder.body.message
+    });
+
+    const validMaterial = await invoke(createRawMaterial, requestFor({
+      body: {
+        name: 'Basmathi rice',
+        categoryId: String(category.body.data._id),
+        subcategoryId: String(subcategory.body.data._id),
+        baseUnitId: String(gram._id),
+        supportedUnits: [
+          { unitId: String(gram._id) },
+          { unitId: String(kilogram._id), isDefaultPurchaseUnit: true }
+        ]
+      }
+    }));
+    expect(validMaterial.statusCode).toBe(201);
+    const material = await InventoryItem.findById(validMaterial.body.data._id);
+    const kgConfiguration = material.supportedUnits.find((entry) => (
+      String(entry.unitId) === String(kilogram._id)
+    ));
+    kgConfiguration.conversionFactorToBase = 999;
+    await material.save();
+    const rejectedConversion = await invoke(createStockReceiptRequest, requestFor({
+      body: {
+        itemId: String(material._id),
+        quantity: 5,
+        unit: 'kg',
+        purchaseUnitPrice: 100
+      }
+    }));
+    expect(rejectedConversion.statusCode).toBe(400);
+    expect(rejectedConversion.body.message).toContain('Unit conversion configuration is invalid');
+
+    kgConfiguration.conversionFactorToBase = 1000;
+    await material.save();
+    const zeroQuantity = await invoke(createStockReceiptRequest, requestFor({
+      body: {
+        itemId: String(material._id),
+        quantity: 0,
+        unit: 'kg',
+        purchaseUnitPrice: 100
+      }
+    }));
+    expect(zeroQuantity.statusCode).toBe(400);
+
+    await expect(runInventoryTransaction((session) => postStockMovement({
+      hotelId,
+      propertyId,
+      itemId: material._id,
+      movementType: 'receipt',
+      quantity: 5,
+      unit: 'kg',
+      conversionFactor: 1000,
+      session
+    }))).rejects.toMatchObject({ statusCode: 400, message: 'Purchase price is required before adding raw material stock.' });
+
+    const purchase = await runInventoryTransaction((session) => postStockMovement({
+      hotelId,
+      propertyId,
+      itemId: material._id,
+      movementType: 'receipt',
+      quantity: 5,
+      unit: 'kg',
+      conversionFactor: 1000,
+      purchaseUnitPrice: 100,
+      session
+    }));
+    const batch = await InventoryBatch.findOne({ itemId: material._id });
+    expect(purchase.movement.quantity).toBe(5000);
+    expect(batch).toMatchObject({
+      quantity: 5000,
+      remainingQuantity: 5000,
+      purchaseQuantity: 5,
+      purchaseUnit: 'kg',
+      purchaseUnitCost: 100,
+      purchaseAmount: 500,
+      purchaseConversionFactor: 1000
+    });
+    const validBatches = await invoke(getInventoryBatches, requestFor({
+      query: { itemId: String(material._id) }
+    }));
+    expect(validBatches.body.data[0].dataIntegrityStatus).toBe('valid');
   });
 });

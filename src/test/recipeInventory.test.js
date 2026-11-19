@@ -16,7 +16,7 @@ import {
 } from '../controllers/productionController.js';
 import {
   FoodOrder, InventoryBalance, InventoryBatch, InventoryItem, InventoryRecipe, InventorySettings,
-  MenuCategory, MenuItem, PreparedFoodMovement, ProductionBatch, Property, RecipeConsumption, StockMovement
+  MenuCategory, MenuItem, PreparedFoodMovement, ProductionBatch, Property, RecipeConsumption, StockMovement, Unit
 } from '../models/index.js';
 import {
   consumePreparedFoodForOrder, consumeRecipesForOrder, postStockMovement, recordDirectInventoryUsage,
@@ -27,6 +27,8 @@ import { setup, teardown } from './setup.js';
 const hotelId = new mongoose.Types.ObjectId();
 const propertyId = new mongoose.Types.ObjectId();
 const actorId = new mongoose.Types.ObjectId();
+let gramUnit;
+let kilogramUnit;
 
 const requestFor = (overrides = {}) => ({
   hotelId,
@@ -59,7 +61,19 @@ const invoke = async (controller, req) => {
 };
 
 describe('recipe-based inventory management', () => {
-  beforeAll(async () => setup());
+  beforeAll(async () => {
+    await setup();
+    [gramUnit, kilogramUnit] = await Promise.all([
+      Unit.create({
+        hotelId, name: 'Gram', symbol: 'g', category: 'weight', isStandard: true,
+        createdBy: actorId, updatedBy: actorId
+      }),
+      Unit.create({
+        hotelId, name: 'Kilogram', symbol: 'kg', category: 'weight', isStandard: true,
+        createdBy: actorId, updatedBy: actorId
+      })
+    ]);
+  });
   afterAll(async () => teardown());
 
   it('keeps individual and bulk recipe activation separate for the same menu item', async () => {
@@ -429,6 +443,13 @@ describe('recipe-based inventory management', () => {
       inventoryType: 'raw_material',
       unit: 'g',
       baseUnit: 'g',
+      baseUnitId: gramUnit._id,
+      supportedUnits: [{
+        unitId: gramUnit._id,
+        unitNameSnapshot: 'Gram',
+        unitSymbolSnapshot: 'g',
+        conversionFactorToBase: 1
+      }],
       currentStock: 0,
       unitCost: 0.01,
       trackExpiry: true
@@ -447,6 +468,7 @@ describe('recipe-based inventory management', () => {
         quantity,
         unit: 'g',
         unitCost: 0.01,
+        purchaseUnitPrice: 0.01,
         location: 'Restaurant Store',
         expiryDate,
         batchNumber,
@@ -668,6 +690,13 @@ describe('recipe-based inventory management', () => {
       inventoryType: 'raw_material',
       unit: 'g',
       baseUnit: 'g',
+      baseUnitId: gramUnit._id,
+      supportedUnits: [{
+        unitId: gramUnit._id,
+        unitNameSnapshot: 'Gram',
+        unitSymbolSnapshot: 'g',
+        conversionFactorToBase: 1
+      }],
       currentStock: 0
     });
     await InventoryRecipe.create({
@@ -727,6 +756,13 @@ describe('recipe-based inventory management', () => {
       inventoryType: 'raw_material',
       unit: 'g',
       baseUnit: 'g',
+      baseUnitId: gramUnit._id,
+      supportedUnits: [{
+        unitId: gramUnit._id,
+        unitNameSnapshot: 'Gram',
+        unitSymbolSnapshot: 'g',
+        conversionFactorToBase: 1
+      }],
       currentStock: 0
     });
     await runInventoryTransaction((session) => postStockMovement({
@@ -736,6 +772,7 @@ describe('recipe-based inventory management', () => {
       movementType: 'receipt',
       quantity: 100,
       unit: 'g',
+      purchaseUnitPrice: 0,
       location: 'Restaurant Store',
       recordedBy: actorId,
       session
@@ -815,6 +852,13 @@ describe('recipe-based inventory management', () => {
       inventoryType: 'raw_material',
       unit: 'g',
       baseUnit: 'g',
+      baseUnitId: gramUnit._id,
+      supportedUnits: [{
+        unitId: gramUnit._id,
+        unitNameSnapshot: 'Gram',
+        unitSymbolSnapshot: 'g',
+        conversionFactorToBase: 1
+      }],
       currentStock: 0,
       trackExpiry: true
     });
@@ -826,6 +870,7 @@ describe('recipe-based inventory management', () => {
       quantity: 1000,
       unit: 'g',
       unitCost: 0.02,
+      purchaseUnitPrice: 0.02,
       location: 'Main Store',
       expiryDate: new Date(Date.now() + 30 * 86400000),
       batchNumber: 'PRODUCTION-INGREDIENT-1',
@@ -1193,6 +1238,13 @@ describe('recipe-based inventory management', () => {
         inventoryType: 'raw_material',
         unit: 'kg',
         baseUnit: 'kg',
+        baseUnitId: kilogramUnit._id,
+        supportedUnits: [{
+          unitId: kilogramUnit._id,
+          unitNameSnapshot: 'Kilogram',
+          unitSymbolSnapshot: 'kg',
+          conversionFactorToBase: 1
+        }],
         currentStock: 0,
         unitCost: 10
       });
@@ -1204,6 +1256,7 @@ describe('recipe-based inventory management', () => {
         quantity: 10,
         unit: 'kg',
         unitCost: 10,
+        purchaseUnitPrice: 10,
         location: 'Main Store',
         recordedBy: actorId,
         session
@@ -1312,6 +1365,13 @@ describe('recipe-based inventory management', () => {
       inventoryType: 'raw_material',
       unit: 'kg',
       baseUnit: 'kg',
+      baseUnitId: kilogramUnit._id,
+      supportedUnits: [{
+        unitId: kilogramUnit._id,
+        unitNameSnapshot: 'Kilogram',
+        unitSymbolSnapshot: 'kg',
+        conversionFactorToBase: 1
+      }],
       currentStock: 0
     });
     await runInventoryTransaction((session) => postStockMovement({
@@ -1322,6 +1382,7 @@ describe('recipe-based inventory management', () => {
       quantity: 10,
       unit: 'kg',
       unitCost: 100,
+      purchaseUnitPrice: 100,
       location: 'Main Store',
       recordedBy: actorId,
       session

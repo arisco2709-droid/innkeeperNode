@@ -8,7 +8,9 @@ import {
   Unit,
   Vendor
 } from '../models/index.js';
-import { getUnitConversionFactor, INVENTORY_UNIT_MASTER } from '../config/inventoryUnits.js';
+import {
+  getStandardUnitConversionFactor, INVENTORY_UNIT_MASTER
+} from '../config/inventoryUnits.js';
 import { logAudit } from '../services/auditService.js';
 import { evaluateAutomaticReorder, runInventoryTransaction } from '../services/inventoryService.js';
 import { resolveStorageLocation } from '../services/storageLocationService.js';
@@ -29,28 +31,6 @@ const codePrefix = (name) => normalize(name)
   .join('')
   .toUpperCase()
   .slice(0, 4) || 'CAT';
-
-const getStandardFactor = (baseUnit, unit) => {
-  if (String(baseUnit._id) === String(unit._id)) return 1;
-  if (unit.category !== baseUnit.category) return null;
-  try {
-    return getUnitConversionFactor({
-      unit: baseUnit.symbol,
-      baseUnit: baseUnit.symbol
-    }, unit.symbol);
-  } catch (error) {
-    if (error.statusCode !== 400) throw error;
-    const unitFactor = Number(unit.conversionFactor);
-    const baseFactor = Number(baseUnit.conversionFactor);
-    if (String(unit.baseUnitId || '') === String(baseUnit._id) && unitFactor > 0) return unitFactor;
-    if (String(baseUnit.baseUnitId || '') === String(unit._id) && baseFactor > 0) return 1 / baseFactor;
-    if (unit.baseUnitId && String(unit.baseUnitId) === String(baseUnit.baseUnitId)
-      && unitFactor > 0 && baseFactor > 0) {
-      return unitFactor / baseFactor;
-    }
-    return null;
-  }
-};
 
 const resolveMaterialUnitFactor = ({ unitId, baseUnit, unitsById, entriesById }) => {
   const cache = new Map([[String(baseUnit._id), 1]]);
@@ -82,7 +62,7 @@ const resolveMaterialUnitFactor = ({ unitId, baseUnit, unitsById, entriesById })
       if (unit.category !== baseUnit.category) {
         return { error: `Purchase unit ${unit.name} must match the base unit type or use a package unit.` };
       }
-      factor = getStandardFactor(baseUnit, unit);
+      factor = getStandardUnitConversionFactor(baseUnit, unit);
     }
 
     if (!Number.isFinite(factor) || factor < 0.000000001) {
@@ -183,7 +163,7 @@ const validateUnitConfiguration = async ({ hotelId, baseUnitId, supportedUnits }
     const factorResult = String(unit._id) === String(baseUnit._id)
       ? { factor: 1 }
       : packageUnit && packageMeasurementUnit && !isPackageUnit(packageMeasurementUnit)
-        ? { factor: packageSize * getStandardFactor(baseUnit, packageMeasurementUnit) }
+        ? { factor: packageSize * getStandardUnitConversionFactor(baseUnit, packageMeasurementUnit) }
         : resolveMaterialUnitFactor({
           unitId: unit._id,
           baseUnit,

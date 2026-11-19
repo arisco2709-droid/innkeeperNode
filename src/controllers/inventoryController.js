@@ -7,7 +7,8 @@ import { generateReference } from '../utils/reference.js';
 import { logAudit } from '../services/auditService.js';
 import { notifyHotelOperations, notifyRoles } from '../services/notificationService.js';
 import {
-  evaluateAutomaticReorder, postStockMovement, runInventoryTransaction
+  evaluateAutomaticReorder, getRawMaterialUnitConfigurationStatus, postStockMovement,
+  resolveRawMaterialPurchaseUnit, runInventoryTransaction
 } from '../services/inventoryService.js';
 import { resolveStorageLocation } from '../services/storageLocationService.js';
 import {
@@ -220,10 +221,14 @@ export const getInventoryBatches = async (req, res, next) => {
       _id: itemId,
       hotelId: req.hotelId,
       propertyId: req.propertyId
-    }).select('_id name location baseUnit unit');
+    }).select('_id name location baseUnit unit baseUnitId inventoryType supportedUnits');
     if (!item) {
       return res.status(404).json({ success: false, message: 'Inventory item not found.' });
     }
+    const unitConfiguration = await getRawMaterialUnitConfigurationStatus({
+      item,
+      hotelId: req.hotelId
+    });
     if (req.query.locationId && !mongoose.isValidObjectId(req.query.locationId)) {
       return res.status(400).json({ success: false, message: 'Choose a valid storage location.' });
     }
@@ -409,8 +414,26 @@ export const getInventoryBatches = async (req, res, next) => {
         const salesRevenue = stats.salesRevenue;
         const wastageLoss = stats.wastageLoss;
         const unrecordedLoss = stats.unrecordedLoss;
+        const purchaseQuantity = Number(batch.purchaseQuantity);
+        const purchaseUnitCost = Number(batch.purchaseUnitCost);
+        const purchaseAmount = Number(batch.purchaseAmount);
+        const purchaseConversionFactor = Number(batch.purchaseConversionFactor);
+        const purchaseDataValid = Number.isFinite(purchaseQuantity) && purchaseQuantity > 0
+          && Boolean(batch.purchaseUnit)
+          && Number.isFinite(purchaseUnitCost) && purchaseUnitCost >= 0
+          && Number.isFinite(purchaseAmount) && purchaseAmount >= 0
+          && Number.isFinite(purchaseConversionFactor) && purchaseConversionFactor > 0
+          && Math.abs(Number(batch.quantity) - purchaseQuantity * purchaseConversionFactor) <= 1e-8
+          && Math.abs(purchaseAmount - Math.round((purchaseQuantity * purchaseUnitCost + Number.EPSILON) * 100) / 100) <= 0.01;
+        const dataIntegrityStatus = !unitConfiguration.valid
+          ? 'configuration_required'
+          : purchaseDataValid ? 'valid' : 'incomplete_purchase_data';
         return {
           ...batch,
+          dataIntegrityStatus,
+          dataIntegrityMessage: !unitConfiguration.valid
+            ? unitConfiguration.message
+            : purchaseDataValid ? '' : 'Historical batch purchase details are incomplete or inconsistent.',
           status: (remainingByBatch.get(String(batch._id)) || 0) > 0 ? 'open' : 'closed',
           materialName: item.name,
           expectedStock: Number(batch.quantity) || 0,
@@ -488,6 +511,13 @@ export const createStockReceiptRequest = async (req, res, next) => {
     }).populate('supportedUnits.unitId', 'symbol name').lean();
     if (!item) {
       return res.status(404).json({ success: false, message: 'Active raw material not found.' });
+    }
+    const unitConfiguration = await getRawMaterialUnitConfigurationStatus({
+      item,
+      hotelId: req.hotelId
+    });
+    if (!unitConfiguration.valid) {
+      return res.status(400).json({ success: false, message: unitConfiguration.message });
     }
     const selectedUnit = getConfiguredRawMaterialUnit(item, unit);
     if (!selectedUnit) {
@@ -879,6 +909,17 @@ export const updateInventoryItem = async (req, res, next) => {
       _id: req.params.id, hotelId: req.hotelId, propertyId: req.propertyId
     });
     if (!currentItem) return res.status(404).json({ success: false, message: 'Inventory item not found.' });
+    const rawMaterialUnitFields = [
+      'unit', 'baseUnit', 'baseUnitId', 'purchaseUnit', 'purchaseUnitId',
+      'purchaseConversionFactor', 'unitConversions', 'packagingOptions', 'supportedUnits'
+    ];
+    if (currentItem.inventoryType === 'raw_material'
+      && rawMaterialUnitFields.some((field) => Object.prototype.hasOwnProperty.call(req.body, field))) {
+      return res.status(400).json({
+        success: false,
+        message: 'Update raw-material units through the Raw Material Master so Unit Master conversions are validated.'
+      });
+    }
     if (updates.locationId !== undefined || updates.location !== undefined) {
       const location = await resolveStorageLocation({
         hotelId: req.hotelId,
@@ -1128,9 +1169,16 @@ export const recordStockMovement = async (req, res, next) => {
         propertyId: req.propertyId,
         inventoryType: 'raw_material',
         isActive: true
-      }).select('_id baseUnit unit supportedUnits').lean();
+      }).select('_id baseUnit unit baseUnitId supportedUnits').lean();
       if (!receiptMaterial) {
         return res.status(400).json({ success: false, message: 'Choose an active raw material for this stock receipt.' });
+      }
+      const unitConfiguration = await getRawMaterialUnitConfigurationStatus({
+        item: receiptMaterial,
+        hotelId: req.hotelId
+      });
+      if (!unitConfiguration.valid) {
+        return res.status(400).json({ success: false, message: unitConfiguration.message });
       }
       if (!Number.isFinite(Number(req.body.purchaseUnitPrice)) || Number(req.body.purchaseUnitPrice) < 0) {
         return res.status(400).json({ success: false, message: 'Enter a valid purchase price for the selected purchase unit.' });
@@ -1273,13 +1321,16 @@ export const recordStockMovement = async (req, res, next) => {
         batchNumber: req.body.batchNumber || '',
         expiryDate: req.body.expiryDate ? new Date(req.body.expiryDate) : null,
         batchDetails: req.body.purchaseUnitPrice !== undefined ? {
-          purchaseQuantity: Number(quantity),
-          purchaseUnit: req.body.unit || '',
+          purchaseQuantity: Number(req.body.packageQuantity ?? quantity),
+          purchaseUnit: req.body.unit || receiptMaterial?.supportedUnits
+            ?.find((entry) => String(entry._id) === String(req.body.purchasePackageId))
+            ?.unitSymbolSnapshot || '',
           purchaseUnitCost: Number(req.body.purchaseUnitPrice),
-          purchaseAmount: Number(quantity) * Number(req.body.purchaseUnitPrice),
+          purchaseAmount: Number(req.body.packageQuantity ?? quantity)
+            * Number(req.body.purchaseUnitPrice),
           purchaseTaxAmount: Number(req.body.purchaseTaxAmount || 0),
           purchaseTaxInclusiveUnitCost: Number(req.body.purchaseUnitPrice)
-            + (Number(req.body.purchaseTaxAmount || 0) / Number(quantity))
+            + (Number(req.body.purchaseTaxAmount || 0) / Number(req.body.packageQuantity ?? quantity))
         } : {},
         recordedBy: req.user._id,
         idempotencyKey: movementIdempotencyKey,
@@ -1617,6 +1668,13 @@ export const createPurchaseOrder = async (req, res, next) => {
       if (!inventoryItem) return res.status(400).json({ success: false, message: 'Purchase order contains an invalid inventory item.' });
       let configuredPurchaseUnit = null;
       if (inventoryItem.inventoryType === 'raw_material') {
+        const unitConfiguration = await getRawMaterialUnitConfigurationStatus({
+          item: inventoryItem,
+          hotelId: req.hotelId
+        });
+        if (!unitConfiguration.valid) {
+          return res.status(400).json({ success: false, message: unitConfiguration.message });
+        }
         const activePurchaseUnits = inventoryItem.supportedUnits.filter((supportedUnit) => supportedUnit.isActive);
         configuredPurchaseUnit = line.purchasePackageId
           ? activePurchaseUnits.find((supportedUnit) => String(supportedUnit._id) === String(line.purchasePackageId))
@@ -1652,6 +1710,16 @@ export const createPurchaseOrder = async (req, res, next) => {
       const conversionFactor = configuredPurchaseUnit
         ? Number(configuredPurchaseUnit.conversionFactorToBase)
         : getUnitConversionFactor(inventoryItem, purchaseUnit);
+      if (inventoryItem.inventoryType === 'raw_material') {
+        await resolveRawMaterialPurchaseUnit({
+          item: inventoryItem,
+          hotelId: req.hotelId,
+          purchaseUnitId: configuredPurchaseUnit?.unitId,
+          purchaseUnit,
+          purchasePackageId: configuredPurchaseUnit?._id,
+          conversionFactor
+        });
+      }
       const configuredUnitId = configuredPurchaseUnit?.unitId
         || (purchaseUnit === inventoryItem.baseUnit
         ? inventoryItem.baseUnitId
@@ -1844,6 +1912,36 @@ export const receivePurchaseOrder = async (req, res, next) => {
         || currentPO.items.reduce((sum, line) => sum + line.totalAmount, 0);
       const lines = [];
       for (const poLine of currentPO.items) {
+        const receiptItem = await InventoryItem.findOne({
+          _id: poLine.itemId,
+          hotelId: req.hotelId,
+          propertyId: req.propertyId,
+          isActive: true
+        }).select('name inventoryType baseUnit unit baseUnitId supportedUnits');
+        if (!receiptItem) {
+          throw Object.assign(new Error(`Active inventory item not found for ${poLine.itemName}.`), { statusCode: 400 });
+        }
+        if (receiptItem.inventoryType === 'raw_material') {
+          if (String(poLine.baseUnitId || '') !== String(receiptItem.baseUnitId || '')
+            || normalizeInventoryUnit(poLine.baseUnit || '') !== normalizeInventoryUnit(receiptItem.baseUnit || receiptItem.unit || '')) {
+            throw Object.assign(new Error(
+              'Base unit is not configured for this raw material. Please configure the base unit before adding stock.'
+            ), { statusCode: 400 });
+          }
+          await resolveRawMaterialPurchaseUnit({
+            item: receiptItem,
+            hotelId: req.hotelId,
+            purchaseUnitId: poLine.unitId,
+            purchaseUnit: poLine.unitSymbolSnapshot || poLine.unit,
+            purchasePackageId: poLine.purchasePackageId,
+            conversionFactor: poLine.conversionFactor,
+            allowConversionSnapshot: true,
+            session
+          });
+          if (!Number.isFinite(Number(poLine.unitCost)) || Number(poLine.unitCost) < 0) {
+            throw Object.assign(new Error(`A valid purchase price is required for ${poLine.itemName}.`), { statusCode: 400 });
+          }
+        }
         const input = (req.body.items || []).find((line) => String(line.itemId) === String(poLine.itemId));
         const remaining = Math.max(0, poLine.quantity - (poLine.receivedQuantity || 0));
         const receivedQuantity = input ? Number(input.receivedQuantity) : (req.body.items ? 0 : remaining);

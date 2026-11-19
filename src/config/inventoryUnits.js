@@ -112,6 +112,28 @@ export const getUnitConversionFactor = (item, unit) => {
   );
 };
 
+export const getStandardUnitConversionFactor = (baseUnit, unit) => {
+  if (String(baseUnit._id) === String(unit._id)) return 1;
+  if (unit.category !== baseUnit.category) return null;
+  try {
+    return getUnitConversionFactor({
+      unit: baseUnit.symbol,
+      baseUnit: baseUnit.symbol
+    }, unit.symbol);
+  } catch (error) {
+    if (error.statusCode !== 400) throw error;
+    const unitFactor = Number(unit.conversionFactor);
+    const baseFactor = Number(baseUnit.conversionFactor);
+    if (String(unit.baseUnitId || '') === String(baseUnit._id) && unitFactor > 0) return unitFactor;
+    if (String(baseUnit.baseUnitId || '') === String(unit._id) && baseFactor > 0) return 1 / baseFactor;
+    if (unit.baseUnitId && String(unit.baseUnitId) === String(baseUnit.baseUnitId)
+      && unitFactor > 0 && baseFactor > 0) {
+      return unitFactor / baseFactor;
+    }
+    return null;
+  }
+};
+
 export const convertQuantityToBase = (item, quantity, unit, factorOverride) => {
   const numericQuantity = Number(quantity);
   if (!Number.isFinite(numericQuantity) || numericQuantity < 0) {

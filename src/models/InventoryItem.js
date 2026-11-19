@@ -64,7 +64,9 @@ const inventoryItemSchema = new mongoose.Schema({
   unit: {
     type: String,
     trim: true,
-    default: 'pieces'
+    default() {
+      return this.inventoryType === 'raw_material' ? '' : 'pieces';
+    }
   },
   baseUnit: {
     type: String,
@@ -135,9 +137,9 @@ inventoryItemSchema.index({ hotelId: 1, propertyId: 1, code: 1 }, { unique: true
 inventoryItemSchema.index({ hotelId: 1, propertyId: 1, inventoryType: 1, isActive: 1, name: 1 });
 
 inventoryItemSchema.pre('validate', function setBaseUnit() {
-  if (!this.baseUnit) this.baseUnit = this.unit || 'pcs';
-  if (!this.unit) this.unit = this.baseUnit;
-  if (!this.purchaseUnit) this.purchaseUnit = this.baseUnit;
+  if (this.inventoryType !== 'raw_material' && !this.baseUnit) this.baseUnit = this.unit || 'pcs';
+  if (!this.unit && this.baseUnit) this.unit = this.baseUnit;
+  if (this.inventoryType !== 'raw_material' && !this.purchaseUnit) this.purchaseUnit = this.baseUnit;
 });
 
 export const InventoryItem = mongoose.models.InventoryItem || mongoose.model('InventoryItem', inventoryItemSchema);

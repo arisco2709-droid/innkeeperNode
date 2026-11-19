@@ -3,16 +3,178 @@ import {
   Hotel, InventoryBalance, InventoryBatch, InventoryItem, InventoryRecipe, MenuItem,
   PreparedFoodMovement, ProductionBatch, PurchaseOrder, RecipeConsumption, StockMovement, Unit, Vendor
 } from '../models/index.js';
-import { convertQuantityToBase, normalizeInventoryUnit } from '../config/inventoryUnits.js';
+import {
+  convertQuantityToBase, getStandardUnitConversionFactor, normalizeInventoryUnit
+} from '../config/inventoryUnits.js';
 import { generateReference } from '../utils/reference.js';
 import { resolveStorageLocation } from './storageLocationService.js';
 
 const round = (value) => Math.round((value + Number.EPSILON) * 10000) / 10000;
 const roundQuantity = (value) => Math.round((value + Number.EPSILON) * 100000000) / 100000000;
+const roundMoney = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
 const OPEN_PURCHASE_ORDER_STATUSES = [
   'draft', 'pending_approval', 'approved', 'ordered', 'partially_received'
 ];
-const roundMoney = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
+const BASE_UNIT_CONFIGURATION_ERROR =
+  'Base unit is not configured for this raw material. Please configure the base unit before adding stock.';
+const RAW_MATERIAL_CONVERSION_ERROR =
+  'Unit conversion configuration is invalid for this raw material. Please correct it before adding stock.';
+
+export const getRawMaterialUnitConfigurationStatus = async ({ item, hotelId, session }) => {
+  if (item.inventoryType !== 'raw_material') return { valid: true };
+  if (!mongoose.isValidObjectId(item.baseUnitId)) {
+    return { valid: false, message: BASE_UNIT_CONFIGURATION_ERROR };
+  }
+
+  const baseUnit = await Unit.findOne({
+    _id: item.baseUnitId?._id || item.baseUnitId,
+    hotelId,
+    isActive: true
+  }).select('_id symbol category').session(session);
+  if (!baseUnit || normalizeInventoryUnit(item.baseUnit || item.unit) !== normalizeInventoryUnit(baseUnit.symbol)) {
+    return { valid: false, message: BASE_UNIT_CONFIGURATION_ERROR };
+  }
+  if (!['weight', 'volume', 'quantity'].includes(baseUnit.category)) {
+    return { valid: false, message: RAW_MATERIAL_CONVERSION_ERROR };
+  }
+
+  const supportedUnits = item.supportedUnits || [];
+  const baseEntry = supportedUnits.find((entry) => (
+    String(entry.unitId?._id || entry.unitId || '') === String(baseUnit._id)
+    && entry.isActive !== false
+  ));
+  if (!baseEntry || !Number.isFinite(Number(baseEntry.conversionFactorToBase))
+    || Math.abs(Number(baseEntry.conversionFactorToBase) - 1) > 1e-9) {
+    return { valid: false, message: RAW_MATERIAL_CONVERSION_ERROR };
+  }
+
+  const activeEntries = supportedUnits.filter((entry) => entry.isActive !== false);
+  const unitIds = [...new Set(activeEntries.map((entry) => (
+    String(entry.unitId?._id || entry.unitId || '')
+  )).concat(activeEntries.map((entry) => String(
+    entry.packageMeasurementUnitId?._id || entry.packageMeasurementUnitId || ''
+  ))).filter(Boolean))];
+  const units = await Unit.find({
+    hotelId,
+    isActive: true,
+    _id: { $in: unitIds }
+  }).select('_id symbol category baseUnitId conversionFactor').session(session);
+  const unitsById = new Map(units.map((unit) => [String(unit._id), unit]));
+  if (unitIds.some((id) => !unitsById.has(id))) {
+    return { valid: false, message: RAW_MATERIAL_CONVERSION_ERROR };
+  }
+  const entriesByUnitId = new Map(supportedUnits.map((entry) => [
+    String(entry.unitId?._id || entry.unitId || ''),
+    entry
+  ]));
+  const resolveConfiguredFactor = (entry, path = new Set()) => {
+    const unitId = String(entry.unitId?._id || entry.unitId || '');
+    if (path.has(unitId)) return null;
+    const unit = unitsById.get(unitId);
+    if (!unit) return null;
+    if (unit.category !== 'package') {
+      return getStandardUnitConversionFactor(baseUnit, unit);
+    }
+    const packageSize = Number(entry.packageSize);
+    const measurementId = String(entry.packageMeasurementUnitId?._id || entry.packageMeasurementUnitId || '');
+    const measurement = unitsById.get(measurementId);
+    const measurementEntry = entriesByUnitId.get(measurementId);
+    if (!Number.isFinite(packageSize) || packageSize <= 0 || !measurement) return null;
+    const nextPath = new Set(path);
+    nextPath.add(unitId);
+    const measurementFactor = measurement.category === 'package'
+      ? measurementEntry && resolveConfiguredFactor(measurementEntry, nextPath)
+      : getStandardUnitConversionFactor(baseUnit, measurement);
+    return Number.isFinite(measurementFactor) && measurementFactor > 0
+      ? packageSize * measurementFactor
+      : null;
+  };
+  for (const entry of activeEntries) {
+    const unit = unitsById.get(String(entry.unitId?._id || entry.unitId || ''));
+    const factor = Number(entry.conversionFactorToBase);
+    const configuredFactor = resolveConfiguredFactor(entry);
+    if (!Number.isFinite(factor) || factor <= 0
+      || !Number.isFinite(configuredFactor) || configuredFactor <= 0
+      || Math.abs(factor - configuredFactor) > 1e-9) {
+      return { valid: false, message: RAW_MATERIAL_CONVERSION_ERROR };
+    }
+  }
+
+  return { valid: true, baseUnit };
+};
+
+export const requireRawMaterialUnitConfiguration = async ({ item, hotelId, session }) => {
+  const status = await getRawMaterialUnitConfigurationStatus({ item, hotelId, session });
+  if (!status.valid) {
+    throw Object.assign(new Error(status.message), { statusCode: 400 });
+  }
+  return status;
+};
+
+export const resolveRawMaterialPurchaseUnit = async ({
+  item,
+  hotelId,
+  purchaseUnitId,
+  purchaseUnit,
+  purchasePackageId,
+  conversionFactor,
+  allowConversionSnapshot = false,
+  session
+}) => {
+  const { baseUnit } = await requireRawMaterialUnitConfiguration({ item, hotelId, session });
+  if (allowConversionSnapshot
+    && (!Number.isFinite(Number(conversionFactor)) || Number(conversionFactor) <= 0)) {
+    throw Object.assign(new Error(RAW_MATERIAL_CONVERSION_ERROR), { statusCode: 400 });
+  }
+  const supportedUnits = item.supportedUnits || [];
+  let entry = purchasePackageId
+    ? supportedUnits.find((candidate) => (
+      candidate.isActive !== false && String(candidate._id) === String(purchasePackageId)
+    ))
+    : null;
+  if (!entry && !purchasePackageId && purchaseUnitId) {
+    const matchingUnits = supportedUnits.filter((candidate) => (
+      candidate.isActive !== false
+      && String(candidate.unitId?._id || candidate.unitId || '') === String(purchaseUnitId)
+    ));
+    entry = matchingUnits.find((candidate) => candidate.isDefaultPurchaseUnit)
+      || matchingUnits.find((candidate) => (
+        normalizeInventoryUnit(candidate.unitSymbolSnapshot || '') === normalizeInventoryUnit(purchaseUnit || '')
+      ))
+      || matchingUnits[0];
+  }
+  if (!entry && !purchasePackageId && !purchaseUnitId) {
+    entry = supportedUnits.find((candidate) => (
+      candidate.isActive !== false
+      && normalizeInventoryUnit(candidate.unitSymbolSnapshot || '') === normalizeInventoryUnit(purchaseUnit || '')
+    ));
+  }
+  if (!entry || !Number.isFinite(Number(entry.conversionFactorToBase))
+    || Number(entry.conversionFactorToBase) <= 0) {
+    throw Object.assign(new Error(`Choose a valid purchase unit configured for ${item.name}.`), { statusCode: 400 });
+  }
+
+  const configuredUnitId = entry.unitId?._id || entry.unitId;
+  const unit = await Unit.findOne({
+    _id: configuredUnitId,
+    hotelId,
+    isActive: true
+  }).select('_id symbol category').session(session);
+  if (!unit || normalizeInventoryUnit(unit.symbol) !== normalizeInventoryUnit(entry.unitSymbolSnapshot || unit.symbol)) {
+    throw Object.assign(new Error(RAW_MATERIAL_CONVERSION_ERROR), { statusCode: 400 });
+  }
+  if (conversionFactor !== undefined && conversionFactor !== null
+    && (!Number.isFinite(Number(conversionFactor))
+      || (!allowConversionSnapshot
+        && Math.abs(Number(conversionFactor) - Number(entry.conversionFactorToBase)) > 1e-9))) {
+    throw Object.assign(new Error(RAW_MATERIAL_CONVERSION_ERROR), { statusCode: 400 });
+  }
+  if (String(unit._id) === String(baseUnit._id)
+    && Math.abs(Number(entry.conversionFactorToBase) - 1) > 1e-9) {
+    throw Object.assign(new Error(RAW_MATERIAL_CONVERSION_ERROR), { statusCode: 400 });
+  }
+  return { entry, unit, baseUnit, conversionFactor: Number(entry.conversionFactorToBase) };
+};
 export const getInventoryBatchAverageCosts = async ({ hotelId, propertyId, itemIds, session }) => {
   const validItemIds = [...new Set(itemIds.map(String))]
     .filter((id) => mongoose.isValidObjectId(id))
@@ -1052,6 +1214,10 @@ export const evaluateAutomaticReorder = async ({
   }
 
   const activeSupportedUnits = (item.supportedUnits || []).filter((unit) => unit.isActive !== false);
+  if (item.inventoryType === 'raw_material') {
+    const unitStatus = await getRawMaterialUnitConfigurationStatus({ item, hotelId, session });
+    if (!unitStatus.valid) return null;
+  }
   const preferredUnitId = String(item.preferredPurchaseUnitId || item.purchaseUnitId || '');
   const configuredPurchaseUnit = activeSupportedUnits.find((unit) => (
     unit.isActive !== false
@@ -1069,10 +1235,22 @@ export const evaluateAutomaticReorder = async ({
     || 1;
   const packageConfigured = Number(configuredPurchaseUnit?.packageSize) > 0
     && Boolean(configuredPurchaseUnit?.packageMeasurementUnitId);
+  if (item.inventoryType === 'raw_material') {
+    await resolveRawMaterialPurchaseUnit({
+      item,
+      hotelId,
+      purchaseUnitId: configuredPurchaseUnit?.unitId?._id || configuredPurchaseUnit?.unitId,
+      purchaseUnit,
+      purchasePackageId: configuredPurchaseUnit?._id,
+      conversionFactor,
+      session
+    });
+  }
   const purchaseQuantity = packageConfigured
     ? Math.ceil(neededBaseQuantity / conversionFactor)
     : roundQuantity(neededBaseQuantity / conversionFactor);
   const unitCost = Number(item.purchasePrice ?? (Number(item.unitCost || 0) * conversionFactor));
+  if (!Number.isFinite(unitCost) || unitCost < 0) return null;
   const totalAmount = round(purchaseQuantity * unitCost);
   const line = {
     itemId: item._id,
@@ -1197,7 +1375,7 @@ export const postStockMovement = async ({
   looseQuantity = 0,
   unitCost: unitCostOverride,
   purchaseUnitPrice = null,
-  purchaseTaxAmount: purchaseTaxAmountOverride = 0,
+  purchaseTaxAmount: purchaseTaxAmountOverride = null,
   vendorId = null,
   autoGenerateBatchNumber = false,
   location = 'Main Store',
@@ -1226,6 +1404,10 @@ export const postStockMovement = async ({
 
   const item = await InventoryItem.findOne({ _id: itemId, hotelId, propertyId, isActive: true }).session(session);
   if (!item) throw Object.assign(new Error('Active inventory item not found.'), { statusCode: 404 });
+  if (item.inventoryType === 'raw_material'
+    && ['receipt', 'return', 'opening', 'adjustment', 'physical_count'].includes(movementType)) {
+    await requireRawMaterialUnitConfiguration({ item, hotelId, session });
+  }
   const storageLocation = await resolveStorageLocation({
     hotelId,
     locationId,
@@ -1294,13 +1476,54 @@ export const postStockMovement = async ({
     }
   }
   const converted = convertQuantityToBase(item, numericQuantity, unit || enteredUnit, conversionFactorOverride);
-  const purchasePrice = purchaseUnitPrice === null || purchaseUnitPrice === undefined
+  let purchaseConversionFactor = converted.factor;
+  const purchasePriceValue = purchaseUnitPrice === null || purchaseUnitPrice === undefined
+    ? batchDetails.purchaseUnitCost
+    : purchaseUnitPrice;
+  const purchasePrice = purchasePriceValue === null || purchasePriceValue === undefined
     ? null
-    : Number(purchaseUnitPrice);
+    : Number(purchasePriceValue);
   if (purchasePrice !== null && (!Number.isFinite(purchasePrice) || purchasePrice < 0)) {
     throw Object.assign(new Error('Purchase price must be a non-negative number.'), { statusCode: 400 });
   }
-  const purchaseTaxAmount = Number(purchaseTaxAmountOverride);
+  if (movementType === 'receipt' && item.inventoryType === 'raw_material') {
+    if (purchasePrice === null) {
+      throw Object.assign(new Error('Purchase price is required before adding raw material stock.'), { statusCode: 400 });
+    }
+    if (!Number.isFinite(enteredQuantity) || enteredQuantity <= 0 || !String(enteredUnit || '').trim()) {
+      throw Object.assign(new Error('Enter a positive purchased quantity and configured purchase unit.'), { statusCode: 400 });
+    }
+    const purchaseConfiguration = await resolveRawMaterialPurchaseUnit({
+      item,
+      hotelId,
+      purchaseUnitId: configuredUnitId,
+      purchaseUnit: unit || enteredUnit,
+      purchasePackageId,
+      conversionFactor: conversionFactor ?? (purchasePackage?.conversionFactorToBase || converted.factor),
+      allowConversionSnapshot: purchasePackageSnapshot,
+      session
+    });
+    if (batchDetails.purchaseQuantity !== undefined) {
+      const recordedPurchaseQuantity = Number(batchDetails.purchaseQuantity);
+      if (!Number.isFinite(recordedPurchaseQuantity) || recordedPurchaseQuantity <= 0
+        || Math.abs(recordedPurchaseQuantity - enteredQuantity) > 1e-8) {
+        throw Object.assign(new Error('Purchase quantity must match the quantity received.'), { statusCode: 400 });
+      }
+    }
+    if (batchDetails.purchaseUnit
+      && normalizeInventoryUnit(batchDetails.purchaseUnit) !== normalizeInventoryUnit(purchaseConfiguration.unit.symbol)) {
+      throw Object.assign(new Error('Purchase unit must match the configured unit received.'), { statusCode: 400 });
+    }
+    purchaseConversionFactor = conversionFactor === undefined || conversionFactor === null
+      ? purchaseConfiguration.conversionFactor
+      : Number(conversionFactor);
+    enteredUnit = purchaseConfiguration.entry.packageName
+      || purchaseConfiguration.entry.unitSymbolSnapshot
+      || purchaseConfiguration.unit.symbol;
+  }
+  const purchaseTaxAmount = Number(
+    purchaseTaxAmountOverride ?? batchDetails.purchaseTaxAmount ?? 0
+  );
   if (!Number.isFinite(purchaseTaxAmount) || purchaseTaxAmount < 0
     || (purchaseTaxAmount > 0 && (purchasePrice === null || movementType !== 'receipt'))) {
     throw Object.assign(new Error('Purchase tax must be a non-negative amount on a stock receipt with a purchase price.'), { statusCode: 400 });
@@ -1346,6 +1569,9 @@ export const postStockMovement = async ({
   const receiptUnitCost = purchasePrice !== null
     ? (purchasePrice / converted.factor) + (baseQuantity > 0 ? purchaseTaxAmount / baseQuantity : 0)
     : Number.isFinite(Number(unitCostOverride)) ? Number(unitCostOverride) : item.unitCost;
+  const purchaseQuantityForBatch = purchasePackage && hasPackageQuantity
+    ? roundQuantity(enteredQuantity + recordedLooseQuantity / purchaseConversionFactor)
+    : enteredQuantity;
   if (delta > 0 && item.trackExpiry && !expiryDate) {
     throw Object.assign(new Error(`An expiry date is required for ${item.name}.`), { statusCode: 400 });
   }
@@ -1467,15 +1693,16 @@ export const postStockMovement = async ({
       unitCost: receiptUnitCost,
       expiryDate,
       ...(vendorId ? { vendorId } : {}),
+      ...batchDetails,
       ...(purchasePrice !== null ? {
-        purchaseQuantity: enteredQuantity,
+        purchaseQuantity: purchaseQuantityForBatch,
         purchaseUnit: enteredUnit,
         purchaseUnitCost: purchasePrice,
-        purchaseAmount: round(enteredQuantity * purchasePrice),
+        purchaseAmount: roundMoney(purchaseQuantityForBatch * purchasePrice),
+        purchaseConversionFactor,
         purchaseTaxAmount: round(purchaseTaxAmount),
         purchaseTaxInclusiveUnitCost: receiptUnitCost * converted.factor
       } : {}),
-      ...batchDetails,
       ...(receivedAt ? { receivedAt } : {})
     }], { session });
   }

@@ -14,6 +14,7 @@ const inventoryBatchSchema = new mongoose.Schema({
   purchaseUnit: { type: String, trim: true, default: '' },
   purchaseUnitCost: { type: Number, min: 0, default: null },
   purchaseAmount: { type: Number, min: 0, default: null },
+  purchaseConversionFactor: { type: Number, min: 0.000000001, default: null },
   purchaseTaxAmount: { type: Number, min: 0, default: 0 },
   purchaseTaxInclusiveUnitCost: { type: Number, min: 0, default: null },
   vendorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor', default: null },
