@@ -3,22 +3,28 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createInventoryItem,
   createPurchaseOrder,
+  createVendor,
   getInventoryBatches,
   recordStockMovement,
   createStockReceiptRequest,
-  receivePurchaseOrderGoods
+  cancelPurchaseMovement,
+  correctPurchaseMovement,
+  receivePurchaseOrderGoods,
+  updateVendor
 } from '../controllers/inventoryController.js';
 import {
   createRawMaterial,
   createRawMaterialCategory,
   createRawMaterialSubcategory,
+  deleteRawMaterial,
   getRawMaterials,
   updateRawMaterial,
   getRawMaterialSubcategories
 } from '../controllers/rawMaterialController.js';
 import { createDefaultInventoryUnits, createInventoryUnit } from '../controllers/inventoryUnitController.js';
-import { GoodsReceipt, InventoryBatch, InventoryItem, PurchaseOrder, StockMovement, Unit, Vendor } from '../models/index.js';
-import { postStockMovement, runInventoryTransaction } from '../services/inventoryService.js';
+import { cancelStockTransfer } from '../controllers/inventoryAdvancedController.js';
+import { GoodsReceipt, InventoryBalance, InventoryBatch, InventoryItem, PurchaseOrder, StockMovement, Unit, Vendor } from '../models/index.js';
+import { postStockMovement, runInventoryTransaction, transferStock } from '../services/inventoryService.js';
 import { setup, teardown } from './setup.js';
 
 const hotelId = new mongoose.Types.ObjectId();
@@ -602,5 +608,232 @@ describe('raw material master API', () => {
       query: { itemId: String(material._id) }
     }));
     expect(validBatches.body.data[0].dataIntegrityStatus).toBe('valid');
+  });
+
+  it('deactivates unused raw materials and blocks delete when stock or history exists', async () => {
+    await invoke(createDefaultInventoryUnits, requestFor());
+    const units = await Unit.find({ hotelId, isActive: true });
+    const gram = units.find((unit) => unit.symbol === 'g');
+    const kilogram = units.find((unit) => unit.symbol === 'kg');
+    const category = await invoke(createRawMaterialCategory, requestFor({
+      body: { name: 'Delete Validation Materials' }
+    }));
+    const subcategory = await invoke(createRawMaterialSubcategory, requestFor({
+      body: {
+        categoryId: String(category.body.data._id),
+        name: 'Delete Validation Subcategory'
+      }
+    }));
+    const unused = await invoke(createRawMaterial, requestFor({
+      body: {
+        name: 'Unused delete material',
+        categoryId: String(category.body.data._id),
+        subcategoryId: String(subcategory.body.data._id),
+        baseUnitId: String(gram._id),
+        supportedUnits: [
+          { unitId: String(gram._id) },
+          { unitId: String(kilogram._id), isDefaultPurchaseUnit: true }
+        ]
+      }
+    }));
+    expect(unused.statusCode).toBe(201);
+    const deleted = await invoke(deleteRawMaterial, requestFor({
+      params: { id: String(unused.body.data._id) }
+    }));
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.body.data.isActive).toBe(false);
+
+    const stocked = await invoke(createRawMaterial, requestFor({
+      body: {
+        name: 'Stocked delete material',
+        categoryId: String(category.body.data._id),
+        subcategoryId: String(subcategory.body.data._id),
+        baseUnitId: String(gram._id),
+        supportedUnits: [
+          { unitId: String(gram._id) },
+          { unitId: String(kilogram._id), isDefaultPurchaseUnit: true }
+        ]
+      }
+    }));
+    await runInventoryTransaction((session) => postStockMovement({
+      hotelId,
+      propertyId,
+      itemId: stocked.body.data._id,
+      movementType: 'receipt',
+      quantity: 1,
+      unit: 'kg',
+      conversionFactor: 1000,
+      purchaseUnitPrice: 50,
+      recordedBy: actorId,
+      session
+    }));
+    const blocked = await invoke(deleteRawMaterial, requestFor({
+      params: { id: String(stocked.body.data._id) }
+    }));
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.body.message).toMatch(/stock|history/i);
+    expect((await InventoryItem.findById(stocked.body.data._id)).isActive).toBe(true);
+  });
+
+  it('rejects duplicate vendor names case-insensitively per hotel', async () => {
+    const created = await invoke(createVendor, requestFor({
+      body: { name: 'Fresh Farms', phone: '9000000001' }
+    }));
+    expect(created.statusCode).toBe(201);
+    const duplicate = await invoke(createVendor, requestFor({
+      body: { name: 'fresh farms', phone: '9000000002' }
+    }));
+    expect(duplicate.statusCode).toBe(409);
+    expect(duplicate.body.message).toMatch(/name/i);
+
+    const other = await invoke(createVendor, requestFor({
+      body: { name: 'Other Farms', phone: '9000000003' }
+    }));
+    const renamed = await invoke(updateVendor, requestFor({
+      params: { id: String(other.body.data._id) },
+      body: { name: 'FRESH FARMS' }
+    }));
+    expect(renamed.statusCode).toBe(409);
+  });
+
+  it('applies tax and discount on receipt movements and supports cancel/correct', async () => {
+    await invoke(createDefaultInventoryUnits, requestFor());
+    const units = await Unit.find({ hotelId, isActive: true });
+    const gram = units.find((unit) => unit.symbol === 'g');
+    const kilogram = units.find((unit) => unit.symbol === 'kg');
+    const category = await invoke(createRawMaterialCategory, requestFor({
+      body: { name: 'Purchase Finance Materials' }
+    }));
+    const subcategory = await invoke(createRawMaterialSubcategory, requestFor({
+      body: {
+        categoryId: String(category.body.data._id),
+        name: 'Purchase Finance Subcategory'
+      }
+    }));
+    const material = await invoke(createRawMaterial, requestFor({
+      body: {
+        name: 'Tax discount rice',
+        categoryId: String(category.body.data._id),
+        subcategoryId: String(subcategory.body.data._id),
+        baseUnitId: String(gram._id),
+        supportedUnits: [
+          { unitId: String(gram._id) },
+          { unitId: String(kilogram._id), isDefaultPurchaseUnit: true }
+        ]
+      }
+    }));
+    const receipt = await invoke(recordStockMovement, requestFor({
+      body: {
+        itemId: String(material.body.data._id),
+        movementType: 'receipt',
+        quantity: 10,
+        unit: 'kg',
+        purchaseUnitPrice: 100,
+        discountAmount: 50,
+        taxPercent: 10
+      }
+    }));
+    expect(receipt.statusCode).toBe(201);
+    expect(receipt.body.data.movement.metadata.purchaseFinancials).toMatchObject({
+      subtotal: 1000,
+      discountAmount: 50,
+      taxAmount: 95,
+      grandTotal: 1045
+    });
+    expect(receipt.body.data.movement.totalValue).toBe(1045);
+    expect((await InventoryItem.findById(material.body.data._id)).currentStock).toBe(10000);
+
+    const corrected = await invoke(correctPurchaseMovement, requestFor({
+      params: { id: String(receipt.body.data.movement._id) },
+      body: {
+        quantity: 8,
+        unit: 'kg',
+        purchaseUnitPrice: 100,
+        discountAmount: 0,
+        taxAmount: 40,
+        notes: 'Corrected quantity'
+      }
+    }));
+    expect(corrected.body.success).toBe(true);
+    expect(corrected.body.data.movement.metadata.purchaseFinancials).toMatchObject({
+      subtotal: 800,
+      discountAmount: 0,
+      taxAmount: 40,
+      grandTotal: 840
+    });
+    expect((await InventoryItem.findById(material.body.data._id)).currentStock).toBe(8000);
+
+    const cancelled = await invoke(cancelPurchaseMovement, requestFor({
+      params: { id: String(corrected.body.data.movement._id) },
+      body: { notes: 'Cancel corrected purchase' }
+    }));
+    expect(cancelled.body.success).toBe(true);
+    expect((await InventoryItem.findById(material.body.data._id)).currentStock).toBe(0);
+    const again = await invoke(cancelPurchaseMovement, requestFor({
+      params: { id: String(corrected.body.data.movement._id) }
+    }));
+    expect(again.body.data.duplicate).toBe(true);
+  });
+
+  it('cancels a transfer and reverses both locations once', async () => {
+    const isolatedHotelId = new mongoose.Types.ObjectId();
+    const isolatedPropertyId = new mongoose.Types.ObjectId();
+    const item = await InventoryItem.create({
+      hotelId: isolatedHotelId,
+      propertyId: isolatedPropertyId,
+      name: `Transfer cancel item ${new mongoose.Types.ObjectId()}`,
+      code: new mongoose.Types.ObjectId().toString().slice(-8),
+      unit: 'kg',
+      baseUnit: 'kg',
+      purchaseUnit: 'kg',
+      currentStock: 20,
+      minStockThreshold: 0,
+      unitCost: 10,
+      isActive: true
+    });
+    await InventoryBalance.create({
+      hotelId: isolatedHotelId,
+      propertyId: isolatedPropertyId,
+      itemId: item._id,
+      location: 'Main Store',
+      quantity: 20
+    });
+    const transfer = await runInventoryTransaction((session) => transferStock({
+      hotelId: isolatedHotelId,
+      propertyId: isolatedPropertyId,
+      itemId: item._id,
+      quantity: 5,
+      unit: 'kg',
+      fromLocation: 'Main Store',
+      toLocation: 'Kitchen Store',
+      recordedBy: actorId,
+      referenceNumber: 'TRF-CANCEL-TEST',
+      idempotencyKey: 'trf-cancel-test',
+      session
+    }));
+    expect(transfer.duplicate).toBe(false);
+    expect(await InventoryBalance.findOne({ itemId: item._id, location: 'Main Store' })
+      .then((balance) => balance.quantity)).toBe(15);
+    expect(await InventoryBalance.findOne({ itemId: item._id, location: 'Kitchen Store' })
+      .then((balance) => balance.quantity)).toBe(5);
+
+    const cancelled = await invoke(cancelStockTransfer, requestFor({
+      hotelId: isolatedHotelId,
+      propertyId: isolatedPropertyId,
+      params: { id: String(transfer.movements[0]._id) },
+      body: { notes: 'Undo transfer' }
+    }));
+    expect(cancelled.body.success).toBe(true);
+    expect(await InventoryBalance.findOne({ itemId: item._id, location: 'Main Store' })
+      .then((balance) => balance.quantity)).toBe(20);
+    expect(await InventoryBalance.findOne({ itemId: item._id, location: 'Kitchen Store' })
+      .then((balance) => balance.quantity)).toBe(0);
+
+    const again = await invoke(cancelStockTransfer, requestFor({
+      hotelId: isolatedHotelId,
+      propertyId: isolatedPropertyId,
+      params: { id: 'TRF-CANCEL-TEST' }
+    }));
+    expect(again.body.data.duplicate).toBe(true);
   });
 });

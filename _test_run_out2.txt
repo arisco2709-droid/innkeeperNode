@@ -1,0 +1,48 @@
+﻿node.exe : npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm 
+help npmrc` for supported config options.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...config options.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+ RUN  v3.2.7 C:/Users/ranjith/Documents/ink2/innkeeperNode
+
+(node:37232) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:37232) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/rawMaterialController.test.js > raw material master API
+[2026-11-20T07:15:32.530Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:59995/?replicaSet=testset
+
+stderr | src/test/rawMaterialController.test.js > raw material master API
+[2026-11-20T07:15:32.530Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+ Ô£ô src/test/rawMaterialController.test.js (7 tests) 6309ms
+   Ô£ô raw material master API > creates hotel-scoped categories and filters subcategories by category  470ms
+   Ô£ô raw material master API > validates material-specific package conversions and snapshots purchase conversion history  989ms
+(node:37232) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:37232) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/recipeInventory.test.js > recipe-based inventory management
+[2026-11-20T07:15:38.899Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:60126/?replicaSet=testset
+
+stderr | src/test/recipeInventory.test.js > recipe-based inventory management
+[2026-11-20T07:15:38.899Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+ Ô£ô src/test/recipeInventory.test.js (10 tests) 3862ms
+   Ô£ô recipe-based inventory management > deducts recipe ingredients at the configured stage, uses FEFO batches, and reverses cancellation  724ms
+   Ô£ô recipe-based inventory management > records batch production once, allocates prepared portions at serving, and keeps wastage separate  445ms
+
+ Test Files  2 passed (2)
+      Tests  17 passed (17)
+   Start at  12:45:30
+   Duration  11.92s (transform 315ms, setup 0ms, collect 1.47s, tests 10.17s, environment 0ms, prepare 88ms)
+

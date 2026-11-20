@@ -64,6 +64,7 @@ export { PurchaseRequisition } from './PurchaseRequisition.js';
 export { PurchaseInvoice } from './PurchaseInvoice.js';
 export { SupplierReturn } from './SupplierReturn.js';
 export { Expense } from './Expense.js';
+export { ExpenseCategory } from './ExpenseCategory.js';
 export { StaffProfile } from './StaffProfile.js';
 export { Shift } from './Shift.js';
 export { Attendance } from './Attendance.js';

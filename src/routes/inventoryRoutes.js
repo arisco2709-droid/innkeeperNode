@@ -5,6 +5,8 @@ import {
   createInventoryItem,
   updateInventoryItem,
   recordStockMovement,
+  correctPurchaseMovement,
+  cancelPurchaseMovement,
   getVendors,
   createVendor,
   updateVendor,
@@ -27,6 +29,7 @@ import {
   createRawMaterial,
   createRawMaterialCategory,
   createRawMaterialSubcategory,
+  deleteRawMaterial,
   getRawMaterialCategories,
   getRawMaterials,
   getRawMaterialSubcategories,
@@ -37,6 +40,7 @@ import {
 import {
   approvePurchaseOrder,
   assignMinibarStock,
+  cancelStockTransfer,
   createDepartmentRequest,
   createDirectInventoryUsage,
   createStockAdjustment,
@@ -117,6 +121,7 @@ router.patch('/raw-materials/subcategories/:id', authorize(), updateRawMaterialS
 router.get('/raw-materials', getRawMaterials);
 router.post('/raw-materials', authorize(), createRawMaterial);
 router.patch('/raw-materials/:id', authorize(), updateRawMaterial);
+router.delete('/raw-materials/:id', authorize(), deleteRawMaterial);
 router.get('/units', getInventoryUnits);
 router.post('/units', authorize(), createInventoryUnit);
 router.post('/units/defaults', authorize(), createDefaultInventoryUnits);
@@ -125,6 +130,8 @@ router.delete('/units/:id', authorize(), deleteInventoryUnit);
 router.post('/items', authorize(), createInventoryItem);
 router.patch('/items/:id', authorize(), updateInventoryItem);
 router.post('/movements', recordStockMovement);
+router.patch('/movements/:id', authorize(), correctPurchaseMovement);
+router.post('/movements/:id/cancel', authorize(), cancelPurchaseMovement);
 router.get('/usage', getDirectInventoryUsage);
 router.post('/usage', createDirectInventoryUsage);
 router.get('/dashboard', getInventoryDashboard);
@@ -138,6 +145,7 @@ router.get('/storage-locations', getStorageLocations);
 router.post('/storage-locations', authorize(), createStorageLocation);
 router.patch('/storage-locations/:id', authorize(), updateStorageLocation);
 router.post('/transfers', authorize(), transferStockBetweenLocations);
+router.post('/transfers/:id/cancel', authorize(), cancelStockTransfer);
 router.get('/ledger', getStockLedger);
 router.get('/adjustments', getStockAdjustments);
 router.post('/adjustments', createStockAdjustment);

@@ -3,6 +3,7 @@ import request from 'supertest';
 import app from '../src/app.js';
 import { connectDB, closeDB } from '../src/config/db.js';
 import { seedDatabase } from '../src/utils/seeder.js';
+import { Reservation } from '../src/models/index.js';
 
 describe('Hotel Management System - API Integration Tests', () => {
   let superAdminToken = '';
@@ -174,7 +175,7 @@ describe('Hotel Management System - API Integration Tests', () => {
 
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
-      expect(res.body.data.reservation.bookingReference).toMatch(/^BK-\d{4}-[A-F0-9]{6}$/);
+      expect(res.body.data.reservation.bookingReference).toMatch(/^[A-Z]{3,4}-\d{8}-\d{6}-[A-F0-9]{8}$/);
 
       testReservationId = res.body.data.reservation._id;
       testInvoiceId = res.body.data.invoice._id;
@@ -204,16 +205,20 @@ describe('Hotel Management System - API Integration Tests', () => {
     it('Check-In updates reservation status and sets room to occupied', async () => {
       const res = await request(app)
         .post(`/api/v1/reservations/${testReservationId}/check-in`)
-        .set('Authorization', `Bearer ${receptionistToken}`);
+        .set('Authorization', `Bearer ${receptionistToken}`)
+        .send({ confirmed: true });
 
       expect(res.status).toBe(200);
       expect(res.body.data.status).toBe('checked_in');
     });
 
     it('Check-Out updates reservation status and marks room as dirty', async () => {
+      await Reservation.findByIdAndUpdate(testReservationId, { paymentStatus: 'paid' });
+
       const res = await request(app)
         .post(`/api/v1/reservations/${testReservationId}/check-out`)
-        .set('Authorization', `Bearer ${receptionistToken}`);
+        .set('Authorization', `Bearer ${receptionistToken}`)
+        .send({ keyReturned: true });
 
       expect(res.status).toBe(200);
       expect(res.body.data.status).toBe('checked_out');

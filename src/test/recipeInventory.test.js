@@ -1340,7 +1340,7 @@ describe('recipe-based inventory management', () => {
       })).toBe(1);
   });
 
-  it('deducts exact recipe ingredient quantities and ignores expected preparation loss for raw materials', async () => {
+  it('grosses up recipe ingredient quantities by expected preparation loss for raw materials', async () => {
     const property = await Property.create({
       hotelId,
       name: 'Loss Isolation Property',
@@ -1400,7 +1400,8 @@ describe('recipe-based inventory management', () => {
       createdBy: actorId
     });
 
-    // Full recipe batch (10 portions) must deduct exactly 2 kg, not 2.14 kg.
+    // Full batch: required = usable / (1 - loss%) = 2 / 0.93 ≈ 2.15053763 kg.
+    const requiredWithLoss = Math.round((2 / (1 - 0.07) + Number.EPSILON) * 100000000) / 100000000;
     const fullBatch = await invoke(createProductionEntry, requestFor({
       propertyId: property._id,
       body: {
@@ -1419,13 +1420,13 @@ describe('recipe-based inventory management', () => {
     }));
     expect(fullBatch.statusCode).toBe(201);
     expect(fullBatch.body.data.batch.ingredients[0]).toMatchObject({
-      theoreticalQuantity: 2,
-      actualQuantity: 2,
+      theoreticalQuantity: requiredWithLoss,
+      actualQuantity: requiredWithLoss,
       wastageQuantity: 0
     });
-    expect((await InventoryItem.findById(rice._id)).currentStock).toBe(8);
+    expect((await InventoryItem.findById(rice._id)).currentStock).toBeCloseTo(10 - requiredWithLoss, 7);
 
-    // Explicit wastage remains a separate deduction.
+    // Explicit wastage remains a separate deduction (loss not applied twice).
     const withWastage = await invoke(createProductionEntry, requestFor({
       propertyId: property._id,
       body: {
@@ -1444,11 +1445,14 @@ describe('recipe-based inventory management', () => {
     }));
     expect(withWastage.statusCode).toBe(201);
     expect(withWastage.body.data.batch.ingredients[0]).toMatchObject({
-      theoreticalQuantity: 2,
-      actualQuantity: 2,
+      theoreticalQuantity: requiredWithLoss,
+      actualQuantity: requiredWithLoss,
       wastageQuantity: 0.2
     });
-    expect((await InventoryItem.findById(rice._id)).currentStock).toBe(5.8);
+    expect((await InventoryItem.findById(rice._id)).currentStock).toBeCloseTo(
+      10 - requiredWithLoss - requiredWithLoss - 0.2,
+      7
+    );
     expect(await StockMovement.countDocuments({
       hotelId,
       propertyId: property._id,
@@ -1482,7 +1486,8 @@ describe('recipe-based inventory management', () => {
       inventoryType: 'raw_material',
       unit: 'g',
       baseUnit: 'g',
-      currentStock: 2,
+      // Enough for gross-up: 2g usable @ 20% loss → 2.5g required
+      currentStock: 10,
       purchasePrice: 40,
       purchaseConversionFactor: 4,
       unitCost: 0
@@ -1495,7 +1500,7 @@ describe('recipe-based inventory management', () => {
       inventoryType: 'raw_material',
       unit: 'g',
       baseUnit: 'g',
-      currentStock: 2,
+      currentStock: 10,
       unitCost: 0
     });
     await InventoryBatch.create([
@@ -1555,9 +1560,10 @@ describe('recipe-based inventory management', () => {
       }
     }));
     expect(production.statusCode).toBe(201);
+    // Production deducts grossed-up qty (×1.25 at 20% loss): 38 × 1.25 = 47.5
     expect(production.body.data.batch).toMatchObject({
-      productionCost: 38,
-      costPerPortion: 3.8,
+      productionCost: 47.5,
+      costPerPortion: 4.75,
       sellingPrice: 20
     });
 

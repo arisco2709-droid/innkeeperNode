@@ -7,7 +7,8 @@ import {
 import { generateReference } from '../utils/reference.js';
 import { logAudit } from '../services/auditService.js';
 import {
-  getInventoryBatchAverageCosts, postStockMovement, recordDirectInventoryUsage, runInventoryTransaction, transferStock
+  cancelTransfer, getInventoryBatchAverageCosts, postStockMovement, recordDirectInventoryUsage,
+  runInventoryTransaction, transferStock
 } from '../services/inventoryService.js';
 import { resolveStorageLocation } from '../services/storageLocationService.js';
 import { convertQuantityToBase, getUnitConversionFactor, normalizeInventoryUnit } from '../config/inventoryUnits.js';
@@ -749,6 +750,42 @@ export const transferStockBetweenLocations = async (req, res, next) => {
     res.status(result.duplicate ? 200 : 201).json({
       success: true,
       message: result.duplicate ? 'Stock transfer was already recorded.' : 'Stock transferred successfully.',
+      data: result
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const cancelStockTransfer = async (req, res, next) => {
+  try {
+    const result = await runInventoryTransaction((session) => cancelTransfer({
+      hotelId: req.hotelId,
+      propertyId: req.propertyId,
+      transferId: req.params.id,
+      recordedBy: req.user._id,
+      notes: req.body?.notes || '',
+      idempotencyKey: req.body?.idempotencyKey || req.get('Idempotency-Key'),
+      session
+    }));
+    if (!result.duplicate) {
+      await logAudit({
+        hotelId: req.hotelId,
+        action: 'CANCEL_STOCK_TRANSFER',
+        entity: 'StockMovement',
+        entityId: result.movements?.[0]?._id || req.params.id,
+        details: {
+          transferId: req.params.id,
+          cancelledReferenceNumber: result.originals?.[0]?.referenceNumber || null
+        },
+        req
+      });
+    }
+    res.json({
+      success: true,
+      message: result.duplicate
+        ? 'Stock transfer was already cancelled.'
+        : 'Stock transfer cancelled; both locations were reversed.',
       data: result
     });
   } catch (err) {
@@ -1716,6 +1753,7 @@ export const saveRecipe = async (req, res, next) => {
     }
     const {
       menuItemId, ingredients, recipeName = '', description = '',
+      preparationInstructions = '',
       servingSize = '1 serving', preparationTimeMinutes = 0,
       productionMode = 'made_to_order', expectedProductionYield = 1,
       expectedPreparationLossPercent = 0, locationId, location = 'Restaurant Store'
@@ -1784,6 +1822,7 @@ export const saveRecipe = async (req, res, next) => {
         location: storageLocation.locationName,
         recipeName: String(recipeName).trim(),
         description: String(description).trim(),
+        preparationInstructions: String(preparationInstructions).trim(),
         servingSize: String(servingSize).trim() || '1 serving',
         preparationTimeMinutes: Number(preparationTimeMinutes),
         expectedProductionYield: Number(expectedProductionYield),

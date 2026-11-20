@@ -349,6 +349,14 @@ export const createProductionBatch = async ({
       session
     })
     : new Map();
+  // Expected preparation loss is a planning allowance: required input = usable / (1 - loss%).
+  // Do not apply this again when recording separate actual wastage lines.
+  const yieldScale = 1 / Number(recipe.expectedProductionYield || 1);
+  const lossFraction = (Number(recipe.expectedPreparationLossPercent) || 0) / 100;
+  if (lossFraction >= 1) {
+    throw Object.assign(new Error('Expected preparation loss must be less than 100%.'), { statusCode: 400 });
+  }
+  const lossScale = 1 / (1 - lossFraction);
   let productionCost = 0;
   let rawMaterialWastageCost = 0;
   for (const recipeIngredient of recipe.ingredients) {
@@ -365,12 +373,9 @@ export const createProductionBatch = async ({
       throw Object.assign(new Error(`Enter actual consumption for ${item.name}.`), { statusCode: 400 });
     }
     const unit = normalizeInventoryUnit(enteredLine?.unit || recipeIngredient.unit || item.baseUnit || item.unit);
-    // Scale by portions vs recipe yield only. Expected preparation loss must NOT inflate
-    // raw-material deductions — recipe ingredient qty is exact consumption per full yield.
-    const yieldScale = 1 / Number(recipe.expectedProductionYield || 1);
     const enteredQuantity = productionMethod === 'actual_consumption'
       ? Number(enteredLine.quantity)
-      : Number(recipeIngredient.quantity) * quantity * yieldScale;
+      : Number(recipeIngredient.quantity) * quantity * yieldScale * lossScale;
     if (!Number.isFinite(enteredQuantity) || enteredQuantity < 0
       || (productionMethod === 'actual_consumption' && enteredQuantity <= 0)) {
       throw Object.assign(new Error(`Enter a valid actual quantity for ${item.name}.`), { statusCode: 400 });
@@ -383,7 +388,7 @@ export const createProductionBatch = async ({
     ).quantity;
     const theoreticalBase = roundQuantity(
       Number(recipeIngredient.quantity)
-        * quantity * yieldScale
+        * quantity * yieldScale * lossScale
         * Number(recipeIngredient.conversionFactor || 1)
     );
     const purchaseConversionFactor = Number(item.purchaseConversionFactor);
@@ -1376,6 +1381,9 @@ export const postStockMovement = async ({
   unitCost: unitCostOverride,
   purchaseUnitPrice = null,
   purchaseTaxAmount: purchaseTaxAmountOverride = null,
+  purchaseDiscountAmount: purchaseDiscountAmountOverride = null,
+  taxPercent = null,
+  discountPercent = null,
   vendorId = null,
   autoGenerateBatchNumber = false,
   location = 'Main Store',
@@ -1521,13 +1529,57 @@ export const postStockMovement = async ({
       || purchaseConfiguration.entry.unitSymbolSnapshot
       || purchaseConfiguration.unit.symbol;
   }
-  const purchaseTaxAmount = Number(
-    purchaseTaxAmountOverride ?? batchDetails.purchaseTaxAmount ?? 0
+  const purchaseQuantityForFinancials = purchasePackage && hasPackageQuantity
+    ? Number(packageQuantity) + (Number(looseQuantity) > 0 && Number(purchasePackage.conversionFactorToBase) > 0
+      ? Number(looseQuantity) / Number(purchasePackage.conversionFactorToBase)
+      : 0)
+    : enteredQuantity;
+  const purchaseSubtotal = purchasePrice !== null && Number.isFinite(purchaseQuantityForFinancials)
+    ? roundMoney(purchaseQuantityForFinancials * purchasePrice)
+    : 0;
+  const resolvedDiscountPercent = Number(
+    discountPercent ?? batchDetails.discountPercent ?? metadata.discountPercent ?? 0
   );
+  let purchaseDiscountAmount = Number(
+    purchaseDiscountAmountOverride
+      ?? batchDetails.purchaseDiscountAmount
+      ?? batchDetails.discountAmount
+      ?? metadata.discountAmount
+      ?? NaN
+  );
+  if (!Number.isFinite(purchaseDiscountAmount)) {
+    purchaseDiscountAmount = Number.isFinite(resolvedDiscountPercent) && resolvedDiscountPercent > 0
+      ? roundMoney(purchaseSubtotal * (resolvedDiscountPercent / 100))
+      : 0;
+  }
+  if (!Number.isFinite(purchaseDiscountAmount) || purchaseDiscountAmount < 0
+    || (purchaseDiscountAmount > 0 && (purchasePrice === null || movementType !== 'receipt'))) {
+    throw Object.assign(new Error('Purchase discount must be a non-negative amount on a stock receipt with a purchase price.'), { statusCode: 400 });
+  }
+  if (purchaseDiscountAmount > purchaseSubtotal + 1e-8) {
+    throw Object.assign(new Error('Purchase discount cannot exceed the purchase subtotal.'), { statusCode: 400 });
+  }
+  const taxableSubtotal = roundMoney(Math.max(0, purchaseSubtotal - purchaseDiscountAmount));
+  const resolvedTaxPercent = Number(
+    taxPercent ?? batchDetails.taxPercent ?? metadata.taxPercent ?? 0
+  );
+  let purchaseTaxAmount = Number(
+    purchaseTaxAmountOverride
+      ?? batchDetails.purchaseTaxAmount
+      ?? batchDetails.taxAmount
+      ?? metadata.taxAmount
+      ?? NaN
+  );
+  if (!Number.isFinite(purchaseTaxAmount)) {
+    purchaseTaxAmount = Number.isFinite(resolvedTaxPercent) && resolvedTaxPercent > 0
+      ? roundMoney(taxableSubtotal * (resolvedTaxPercent / 100))
+      : 0;
+  }
   if (!Number.isFinite(purchaseTaxAmount) || purchaseTaxAmount < 0
     || (purchaseTaxAmount > 0 && (purchasePrice === null || movementType !== 'receipt'))) {
     throw Object.assign(new Error('Purchase tax must be a non-negative amount on a stock receipt with a purchase price.'), { statusCode: 400 });
   }
+  const purchaseGrandTotal = roundMoney(taxableSubtotal + purchaseTaxAmount);
   if (autoGenerateBatchNumber && movementType === 'receipt' && !batchNumber) {
     const hotel = await Hotel.findById(hotelId).select('name').session(session);
     if (!hotel?.name) {
@@ -1567,11 +1619,25 @@ export const postStockMovement = async ({
       ? baseQuantity - currentLocationStock
       : -baseQuantity;
   const receiptUnitCost = purchasePrice !== null
-    ? (purchasePrice / converted.factor) + (baseQuantity > 0 ? purchaseTaxAmount / baseQuantity : 0)
+    ? (purchasePrice / converted.factor)
+      - (baseQuantity > 0 ? purchaseDiscountAmount / baseQuantity : 0)
+      + (baseQuantity > 0 ? purchaseTaxAmount / baseQuantity : 0)
     : Number.isFinite(Number(unitCostOverride)) ? Number(unitCostOverride) : item.unitCost;
   const purchaseQuantityForBatch = purchasePackage && hasPackageQuantity
     ? roundQuantity(enteredQuantity + recordedLooseQuantity / purchaseConversionFactor)
     : enteredQuantity;
+  const purchaseFinancials = purchasePrice !== null && movementType === 'receipt'
+    ? {
+      quantity: purchaseQuantityForBatch,
+      unitCost: purchasePrice,
+      subtotal: purchaseSubtotal,
+      discountAmount: roundMoney(purchaseDiscountAmount),
+      discountPercent: Number.isFinite(resolvedDiscountPercent) ? resolvedDiscountPercent : 0,
+      taxAmount: roundMoney(purchaseTaxAmount),
+      taxPercent: Number.isFinite(resolvedTaxPercent) ? resolvedTaxPercent : 0,
+      grandTotal: purchaseGrandTotal
+    }
+    : null;
   if (delta > 0 && item.trackExpiry && !expiryDate) {
     throw Object.assign(new Error(`An expiry date is required for ${item.name}.`), { statusCode: 400 });
   }
@@ -1700,14 +1766,19 @@ export const postStockMovement = async ({
         purchaseUnitCost: purchasePrice,
         purchaseAmount: roundMoney(purchaseQuantityForBatch * purchasePrice),
         purchaseConversionFactor,
+        purchaseDiscountAmount: roundMoney(purchaseDiscountAmount),
         purchaseTaxAmount: round(purchaseTaxAmount),
-        purchaseTaxInclusiveUnitCost: receiptUnitCost * converted.factor
+        purchaseTaxInclusiveUnitCost: receiptUnitCost * converted.factor,
+        purchaseGrandTotal
       } : {}),
       ...(receivedAt ? { receivedAt } : {})
     }], { session });
   }
-  if (delta >= 0) movementTotalValue = round(Math.abs(delta) * receiptUnitCost);
-  else movementTotalValue = round(movementTotalValue);
+  if (delta >= 0) {
+    movementTotalValue = purchaseFinancials
+      ? purchaseGrandTotal
+      : round(Math.abs(delta) * receiptUnitCost);
+  } else movementTotalValue = round(movementTotalValue);
   const movementUnitCost = Math.abs(delta) > 0
     ? round(movementTotalValue / Math.abs(delta))
     : receiptUnitCost;
@@ -1744,7 +1815,12 @@ export const postStockMovement = async ({
     conversionFactor: purchasePackage ? Number(purchasePackage.conversionFactorToBase) : converted.factor,
     baseUnit: item.baseUnit || item.unit,
     baseUnitId: item.baseUnitId || null,
-    metadata: { ...metadata, locationPreviousStock: balanceMovement.previous, locationNewStock: balanceMovement.current }
+    metadata: {
+      ...metadata,
+      ...(purchaseFinancials ? { purchaseFinancials } : {}),
+      locationPreviousStock: balanceMovement.previous,
+      locationNewStock: balanceMovement.current
+    }
   }], { session }).then(([created]) => created);
 
   if (item.inventoryType === 'raw_material') {
@@ -1917,6 +1993,522 @@ export const transferStock = async ({
     }
   ], { session, ordered: true });
   return { movements, item, duplicate: false };
+};
+
+const isMovementCancelled = (movement) => (
+  movement?.metadata?.status === 'cancelled'
+  || Boolean(movement?.metadata?.reversedByMovementId)
+  || Boolean(movement?.metadata?.cancelledAt)
+);
+
+const receiptBatchLocationFilter = (movement) => ([
+  ...(movement.locationId ? [{ locationId: movement.locationId }] : []),
+  { locationId: null, location: movement.location }
+]);
+
+const findReceiptBatch = async (movement, session) => {
+  const locationFilter = {
+    hotelId: movement.hotelId,
+    propertyId: movement.propertyId,
+    itemId: movement.itemId,
+    $or: receiptBatchLocationFilter(movement)
+  };
+  if (movement.batchNumber) {
+    const numbered = await InventoryBatch.findOne({
+      ...locationFilter,
+      batchNumber: movement.batchNumber
+    }).sort({ receivedAt: -1, _id: -1 }).session(session);
+    if (numbered) return numbered;
+  }
+  return InventoryBatch.findOne({
+    ...locationFilter,
+    remainingQuantity: { $gte: roundQuantity(Number(movement.quantity)) }
+  }).sort({ receivedAt: -1, _id: -1 }).session(session);
+};
+
+export const cancelStockReceipt = async ({
+  hotelId,
+  propertyId,
+  movementId,
+  recordedBy,
+  notes = '',
+  idempotencyKey,
+  session
+}) => {
+  const key = idempotencyKey || `cancel-receipt:${movementId}`;
+  const existingReversal = await StockMovement.findOne({
+    hotelId,
+    propertyId,
+    idempotencyKey: key
+  }).session(session);
+  if (existingReversal) {
+    const original = await StockMovement.findOne({ _id: movementId, hotelId, propertyId }).session(session);
+    return { movement: original, reversal: existingReversal, duplicate: true };
+  }
+
+  const movement = await StockMovement.findOne({
+    _id: movementId,
+    hotelId,
+    propertyId
+  }).session(session);
+  if (!movement) throw Object.assign(new Error('Stock movement not found.'), { statusCode: 404 });
+  if (movement.movementType !== 'receipt') {
+    throw Object.assign(new Error('Only purchase receipts can be cancelled with this endpoint.'), { statusCode: 400 });
+  }
+  if (isMovementCancelled(movement)) {
+    const prior = movement.metadata?.reversedByMovementId
+      ? await StockMovement.findById(movement.metadata.reversedByMovementId).session(session)
+      : null;
+    return { movement, reversal: prior, duplicate: true };
+  }
+
+  const item = await InventoryItem.findOne({
+    _id: movement.itemId, hotelId, propertyId
+  }).session(session);
+  if (!item) throw Object.assign(new Error('Inventory item not found.'), { statusCode: 404 });
+
+  const qty = roundQuantity(Number(movement.quantity));
+  const receiptBatch = await findReceiptBatch(movement, session);
+  if (receiptBatch && roundQuantity(receiptBatch.remainingQuantity) + 1e-8 < qty) {
+    throw Object.assign(new Error(
+      'This purchase cannot be cancelled because part of the received stock has already been used.'
+    ), { statusCode: 409 });
+  }
+
+  const previousStock = item.currentStock;
+  const nextStock = roundQuantity(previousStock - qty);
+  if (nextStock < -1e-8) {
+    throw Object.assign(new Error('Insufficient remaining stock to reverse this purchase.'), { statusCode: 409 });
+  }
+  const updatedItem = await InventoryItem.findOneAndUpdate({
+    _id: item._id,
+    hotelId,
+    propertyId,
+    currentStock: { $gte: qty }
+  }, { $inc: { currentStock: -qty } }, { new: true, session });
+  if (!updatedItem) {
+    throw Object.assign(new Error('Insufficient remaining stock to reverse this purchase.'), { statusCode: 409 });
+  }
+  const balance = await updateBalance({
+    hotelId,
+    propertyId,
+    item: updatedItem,
+    location: movement.location,
+    locationId: movement.locationId,
+    delta: -qty,
+    session
+  });
+  if (receiptBatch) {
+    const batchUpdate = await InventoryBatch.updateOne({
+      _id: receiptBatch._id,
+      remainingQuantity: { $gte: qty }
+    }, { $inc: { remainingQuantity: -qty } }, { session });
+    if (batchUpdate.modifiedCount !== 1) {
+      throw Object.assign(new Error('Receipt batch changed concurrently; retry the purchase cancellation.'), { statusCode: 409 });
+    }
+  }
+
+  const [reversal] = await StockMovement.create([{
+    hotelId,
+    propertyId,
+    itemId: item._id,
+    movementType: 'issue',
+    quantity: qty,
+    previousStock,
+    newStock: nextStock,
+    unitCost: movement.unitCost,
+    totalValue: movement.totalValue,
+    referenceNumber: movement.referenceNumber,
+    notes: notes || `Purchase receipt cancelled: ${movement.referenceNumber || movement._id}`,
+    recordedBy,
+    location: movement.location,
+    locationId: movement.locationId,
+    department: movement.department || '',
+    vendorId: movement.vendorId,
+    purchaseUnitPrice: movement.purchaseUnitPrice,
+    idempotencyKey: key,
+    batchNumber: movement.batchNumber || '',
+    enteredQuantity: movement.enteredQuantity,
+    enteredUnit: movement.enteredUnit,
+    enteredUnitId: movement.enteredUnitId,
+    conversionFactor: movement.conversionFactor,
+    baseUnit: movement.baseUnit,
+    baseUnitId: movement.baseUnitId,
+    batchAllocations: receiptBatch ? [{
+      batchId: receiptBatch._id,
+      quantity: qty,
+      unitCost: movement.unitCost,
+      totalCost: movement.totalValue,
+      source: 'batch'
+    }] : [],
+    metadata: {
+      source: 'purchase_cancellation',
+      reversesMovementId: movement._id,
+      locationPreviousStock: balance.previous,
+      locationNewStock: balance.current,
+      purchaseFinancials: movement.metadata?.purchaseFinancials || null
+    }
+  }], { session });
+
+  movement.metadata = {
+    ...(movement.metadata || {}),
+    status: 'cancelled',
+    cancelledAt: new Date(),
+    reversedByMovementId: reversal._id
+  };
+  movement.markModified('metadata');
+  await movement.save({ session });
+
+  if (item.inventoryType === 'raw_material') {
+    await evaluateAutomaticReorder({
+      hotelId,
+      propertyId,
+      itemId: item._id,
+      recordedBy,
+      session
+    });
+  }
+
+  return { movement, reversal, item: updatedItem, duplicate: false };
+};
+
+export const correctStockReceipt = async ({
+  hotelId,
+  propertyId,
+  movementId,
+  recordedBy,
+  corrections = {},
+  notes = '',
+  idempotencyKey,
+  session
+}) => {
+  const cancelKey = idempotencyKey ? `${idempotencyKey}:cancel` : `correct-receipt:${movementId}:cancel`;
+  const postKey = idempotencyKey ? `${idempotencyKey}:repost` : `correct-receipt:${movementId}:repost`;
+  const existingRepost = await StockMovement.findOne({ hotelId, propertyId, idempotencyKey: postKey }).session(session);
+  if (existingRepost) {
+    const original = await StockMovement.findOne({ _id: movementId, hotelId, propertyId }).session(session);
+    const reversal = original?.metadata?.reversedByMovementId
+      ? await StockMovement.findById(original.metadata.reversedByMovementId).session(session)
+      : null;
+    return { original, reversal, movement: existingRepost, duplicate: true };
+  }
+
+  const originalMovement = await StockMovement.findOne({ _id: movementId, hotelId, propertyId }).session(session);
+  if (!originalMovement) throw Object.assign(new Error('Stock movement not found.'), { statusCode: 404 });
+  if (originalMovement.movementType !== 'receipt') {
+    throw Object.assign(new Error('Only purchase receipts can be corrected.'), { statusCode: 400 });
+  }
+  if (isMovementCancelled(originalMovement)) {
+    const cancelledByThisCorrection = await StockMovement.exists({
+      hotelId,
+      propertyId,
+      idempotencyKey: cancelKey
+    }).session(session);
+    if (!cancelledByThisCorrection) {
+      throw Object.assign(new Error('This purchase was already cancelled and cannot be corrected.'), { statusCode: 409 });
+    }
+  }
+
+  const cancelled = await cancelStockReceipt({
+    hotelId,
+    propertyId,
+    movementId,
+    recordedBy,
+    notes: notes || 'Purchase corrected; original receipt reversed.',
+    idempotencyKey: cancelKey,
+    session
+  });
+  if (cancelled.duplicate && !cancelled.reversal) {
+    throw Object.assign(new Error('This purchase was already cancelled and cannot be corrected.'), { statusCode: 409 });
+  }
+
+  const original = cancelled.movement;
+  const quantity = corrections.quantity ?? original.enteredQuantity ?? original.quantity;
+  const unit = corrections.unit ?? original.enteredUnit ?? original.baseUnit;
+  const purchaseUnitPrice = corrections.purchaseUnitPrice
+    ?? corrections.unitCost
+    ?? original.purchaseUnitPrice
+    ?? original.metadata?.purchaseFinancials?.unitCost;
+  const purchaseTaxAmount = corrections.purchaseTaxAmount
+    ?? corrections.taxAmount
+    ?? original.metadata?.purchaseFinancials?.taxAmount
+    ?? 0;
+  const purchaseDiscountAmount = corrections.purchaseDiscountAmount
+    ?? corrections.discountAmount
+    ?? original.metadata?.purchaseFinancials?.discountAmount
+    ?? 0;
+  const taxPercent = corrections.taxPercent ?? original.metadata?.purchaseFinancials?.taxPercent ?? 0;
+  const discountPercent = corrections.discountPercent
+    ?? original.metadata?.purchaseFinancials?.discountPercent
+    ?? 0;
+  const purchasePackageId = corrections.purchasePackageId ?? original.purchasePackageId;
+  const packageQuantity = corrections.packageQuantity
+    ?? (purchasePackageId ? original.enteredQuantity : undefined);
+
+  const repost = await postStockMovement({
+    hotelId,
+    propertyId,
+    itemId: original.itemId,
+    movementType: 'receipt',
+    quantity,
+    unit,
+    unitId: corrections.unitId ?? original.enteredUnitId,
+    conversionFactor: corrections.conversionFactor ?? original.conversionFactor,
+    purchasePackageId,
+    purchasePackageName: corrections.purchasePackageName ?? original.purchasePackageName,
+    packageQuantity,
+    looseQuantity: corrections.looseQuantity ?? original.looseQuantity ?? 0,
+    purchaseUnitPrice,
+    purchaseTaxAmount,
+    purchaseDiscountAmount,
+    taxPercent,
+    discountPercent,
+    vendorId: corrections.vendorId ?? original.vendorId,
+    location: corrections.location ?? original.location,
+    locationId: corrections.locationId ?? original.locationId,
+    department: corrections.department ?? original.department ?? '',
+    referenceNumber: original.referenceNumber,
+    notes: notes || `Corrected purchase for ${original.referenceNumber || original._id}`,
+    recordedBy,
+    batchNumber: corrections.batchNumber || '',
+    expiryDate: corrections.expiryDate ? new Date(corrections.expiryDate) : original.expiryDate,
+    idempotencyKey: postKey,
+    metadata: {
+      source: 'purchase_correction',
+      correctsMovementId: original._id,
+      reversalMovementId: cancelled.reversal?._id
+    },
+    session
+  });
+
+  return {
+    original,
+    reversal: cancelled.reversal,
+    movement: repost.movement,
+    item: repost.item,
+    duplicate: Boolean(repost.duplicate)
+  };
+};
+
+export const cancelTransfer = async ({
+  hotelId,
+  propertyId,
+  transferId,
+  recordedBy,
+  notes = '',
+  idempotencyKey,
+  session
+}) => {
+  const keyBase = idempotencyKey || `cancel-transfer:${transferId}`;
+  const existingOut = await StockMovement.findOne({
+    hotelId,
+    propertyId,
+    idempotencyKey: `${keyBase}:out`
+  }).session(session);
+  if (existingOut) {
+    const pair = await StockMovement.find({
+      hotelId,
+      propertyId,
+      referenceNumber: existingOut.referenceNumber,
+      movementType: 'transfer',
+      'metadata.source': 'transfer_cancellation'
+    }).session(session);
+    return { movements: pair.length ? pair : [existingOut], duplicate: true };
+  }
+
+  let seed = null;
+  if (mongoose.isValidObjectId(transferId)) {
+    seed = await StockMovement.findOne({
+      _id: transferId,
+      hotelId,
+      propertyId,
+      movementType: 'transfer'
+    }).session(session);
+  }
+  if (!seed) {
+    seed = await StockMovement.findOne({
+      hotelId,
+      propertyId,
+      movementType: 'transfer',
+      referenceNumber: String(transferId)
+    }).session(session);
+  }
+  if (!seed) throw Object.assign(new Error('Stock transfer not found.'), { statusCode: 404 });
+  if (seed.metadata?.source === 'transfer_cancellation') {
+    throw Object.assign(new Error('Cannot cancel a transfer reversal movement.'), { statusCode: 400 });
+  }
+
+  const originals = await StockMovement.find({
+    hotelId,
+    propertyId,
+    movementType: 'transfer',
+    referenceNumber: seed.referenceNumber,
+    $or: [
+      { 'metadata.source': { $exists: false } },
+      { 'metadata.source': { $ne: 'transfer_cancellation' } }
+    ]
+  }).sort({ createdAt: 1, _id: 1 }).session(session);
+
+  if (originals.length < 2) {
+    throw Object.assign(new Error('Transfer pair is incomplete and cannot be cancelled safely.'), { statusCode: 409 });
+  }
+  if (originals.some(isMovementCancelled)) {
+    return { movements: originals, duplicate: true };
+  }
+
+  const fromLocation = originals[0].metadata?.fromLocation || originals[0].location;
+  const toLocation = originals[0].metadata?.toLocation
+    || originals[0].destinationLocation
+    || originals[1].location;
+  const outMovement = originals.find((movement) => movement.location === fromLocation) || originals[0];
+  const inMovement = originals.find((movement) => movement.location === toLocation)
+    || originals.find((movement) => String(movement._id) !== String(outMovement._id));
+  if (!inMovement) {
+    throw Object.assign(new Error('Transfer destination movement was not found.'), { statusCode: 409 });
+  }
+
+  const qty = roundQuantity(Number(outMovement.quantity));
+  const item = await InventoryItem.findOne({
+    _id: outMovement.itemId, hotelId, propertyId
+  }).session(session);
+  if (!item) throw Object.assign(new Error('Inventory item not found.'), { statusCode: 404 });
+
+  const source = await updateBalance({
+    hotelId,
+    propertyId,
+    item,
+    location: fromLocation,
+    locationId: outMovement.locationId,
+    delta: qty,
+    session
+  });
+  const destination = await updateBalance({
+    hotelId,
+    propertyId,
+    item,
+    location: toLocation,
+    locationId: inMovement.locationId,
+    delta: -qty,
+    session
+  });
+
+  const destinationBatches = await InventoryBatch.find({
+    hotelId,
+    propertyId,
+    itemId: item._id,
+    $or: [
+      ...(inMovement.locationId ? [{ locationId: inMovement.locationId }] : []),
+      { locationId: null, location: toLocation }
+    ],
+    remainingQuantity: { $gt: 0 }
+  }).sort({ receivedAt: 1, _id: 1 }).session(session);
+
+  // Balance-only transfers (no destination batches) reverse location quantities only.
+  // When batches exist, require enough remaining destination batch qty to reverse.
+  const destinationBatchQty = destinationBatches.reduce(
+    (sum, batch) => sum + Number(batch.remainingQuantity || 0),
+    0
+  );
+  if (destinationBatches.length > 0 && destinationBatchQty + 1e-8 < qty) {
+    throw Object.assign(new Error(
+      'This transfer cannot be cancelled because destination stock is no longer available to reverse.'
+    ), { statusCode: 409 });
+  }
+
+  let remainingToMove = destinationBatches.length ? qty : 0;
+  for (const batch of destinationBatches) {
+    if (remainingToMove <= 0) break;
+    const movedQuantity = Math.min(batch.remainingQuantity, remainingToMove);
+    const update = await InventoryBatch.updateOne({
+      _id: batch._id,
+      remainingQuantity: { $gte: movedQuantity }
+    }, { $inc: { remainingQuantity: -movedQuantity } }, { session });
+    if (update.modifiedCount !== 1) {
+      throw Object.assign(new Error('Inventory batch changed concurrently; retry the transfer cancellation.'), { statusCode: 409 });
+    }
+    await InventoryBatch.create([{
+      hotelId,
+      propertyId,
+      itemId: item._id,
+      location: fromLocation,
+      locationId: outMovement.locationId,
+      batchNumber: batch.batchNumber,
+      quantity: movedQuantity,
+      remainingQuantity: movedQuantity,
+      unitCost: batch.unitCost,
+      expiryDate: batch.expiryDate,
+      receivedAt: batch.receivedAt
+    }], { session });
+    remainingToMove = roundQuantity(remainingToMove - movedQuantity);
+  }
+  if (remainingToMove > 1e-8) {
+    throw Object.assign(new Error(
+      'This transfer cannot be cancelled because destination stock is no longer available to reverse.'
+    ), { statusCode: 409 });
+  }
+
+  const reverseReference = generateReference('TRX');
+  const common = {
+    hotelId,
+    propertyId,
+    itemId: item._id,
+    movementType: 'transfer',
+    quantity: qty,
+    enteredQuantity: outMovement.enteredQuantity,
+    enteredUnit: outMovement.enteredUnit,
+    conversionFactor: outMovement.conversionFactor,
+    baseUnit: outMovement.baseUnit || item.baseUnit || item.unit,
+    previousStock: item.currentStock,
+    newStock: item.currentStock,
+    unitCost: item.unitCost,
+    totalValue: round(qty * item.unitCost),
+    referenceNumber: reverseReference,
+    notes: notes || `Cancelled transfer ${outMovement.referenceNumber}`,
+    recordedBy,
+    sourceDepartment: outMovement.destinationDepartment || '',
+    destinationDepartment: outMovement.sourceDepartment || '',
+    destinationLocation: fromLocation,
+    destinationLocationId: outMovement.locationId,
+    metadata: {
+      source: 'transfer_cancellation',
+      cancelsReferenceNumber: outMovement.referenceNumber,
+      cancelsMovementIds: originals.map((movement) => String(movement._id)),
+      fromLocation: toLocation,
+      toLocation: fromLocation
+    }
+  };
+  const reversals = await StockMovement.create([
+    {
+      ...common,
+      location: toLocation,
+      locationId: inMovement.locationId,
+      department: inMovement.department || '',
+      idempotencyKey: `${keyBase}:out`,
+      metadata: { ...common.metadata, locationPreviousStock: destination.previous, locationNewStock: destination.current }
+    },
+    {
+      ...common,
+      location: fromLocation,
+      locationId: outMovement.locationId,
+      department: outMovement.department || '',
+      idempotencyKey: `${keyBase}:in`,
+      metadata: { ...common.metadata, locationPreviousStock: source.previous, locationNewStock: source.current }
+    }
+  ], { session, ordered: true });
+
+  for (const original of originals) {
+    original.metadata = {
+      ...(original.metadata || {}),
+      status: 'cancelled',
+      cancelledAt: new Date(),
+      reversedByReferenceNumber: reverseReference,
+      reversedByMovementIds: reversals.map((movement) => String(movement._id))
+    };
+    original.markModified('metadata');
+    await original.save({ session });
+  }
+
+  return { movements: reversals, originals, item, duplicate: false };
 };
 
 export const consumeRecipesForOrder = async (order, session, {

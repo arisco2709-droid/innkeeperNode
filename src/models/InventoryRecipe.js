@@ -24,6 +24,7 @@ const inventoryRecipeSchema = new mongoose.Schema({
   location: { type: String, trim: true, default: 'Restaurant Store' },
   recipeName: { type: String, trim: true, default: '' },
   description: { type: String, trim: true, default: '' },
+  preparationInstructions: { type: String, trim: true, default: '' },
   servingSize: { type: String, trim: true, default: '1 serving' },
   preparationTimeMinutes: { type: Number, min: 0, default: 0 },
   expectedProductionYield: { type: Number, min: 0.00000001, default: 1 },

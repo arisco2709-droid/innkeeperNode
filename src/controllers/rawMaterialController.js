@@ -659,3 +659,58 @@ export const updateRawMaterial = async (req, res, next) => {
     next(error);
   }
 };
+
+export const deleteRawMaterial = async (req, res, next) => {
+  try {
+    if (!req.hotelId || !req.propertyId) {
+      return sendError(res, 400, 'A hotel and property context are required to delete raw materials.');
+    }
+    const item = await InventoryItem.findOne({
+      _id: req.params.id,
+      hotelId: req.hotelId,
+      propertyId: req.propertyId,
+      inventoryType: 'raw_material'
+    });
+    if (!item) return sendError(res, 404, 'Raw material not found.');
+    if (item.isActive === false) {
+      return res.json({
+        success: true,
+        message: 'Raw material was already deactivated.',
+        data: item
+      });
+    }
+    const hasStock = Number(item.currentStock || 0) > 0;
+    const hasHistory = await StockMovement.exists({
+      hotelId: req.hotelId,
+      propertyId: req.propertyId,
+      itemId: item._id
+    });
+    if (hasStock || hasHistory) {
+      return sendError(
+        res,
+        409,
+        hasStock
+          ? 'This raw material still has stock on hand and cannot be deleted. Reduce stock to zero first, or keep the material inactive only after history is cleared.'
+          : 'This raw material has stock movement history and cannot be deleted. History must remain intact.'
+      );
+    }
+    item.isActive = false;
+    item.updatedBy = req.user._id;
+    await item.save();
+    await logAudit({
+      hotelId: req.hotelId,
+      action: 'DELETE_RAW_MATERIAL',
+      entity: 'InventoryItem',
+      entityId: item._id,
+      details: { name: item.name, code: item.code, isActive: false },
+      req
+    });
+    res.json({
+      success: true,
+      message: 'Unused raw material deactivated.',
+      data: item
+    });
+  } catch (error) {
+    next(error);
+  }
+};

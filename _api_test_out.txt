@@ -1,0 +1,106 @@
+﻿node.exe : npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm 
+help npmrc` for supported config options.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...config options.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+ RUN  v3.2.7 C:/Users/ranjith/Documents/ink2/innkeeperNode
+
+(node:14788) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:14788) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | tests/api.test.js > Hotel Management System - API Integration Tests
+[2026-11-20T07:17:46.791Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:64302/?replicaSet=testset
+
+stderr | tests/api.test.js > Hotel Management System - API Integration Tests
+[2026-11-20T07:17:46.793Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | tests/api.test.js > Hotel Management System - API Integration Tests
+[2026-11-20T07:17:46.795Z] [INFO]: Starting database seeding...
+
+stdout | tests/api.test.js > Hotel Management System - API Integration Tests
+[2026-11-20T07:17:48.152Z] [INFO]: Database seeding completed successfully!
+[2026-11-20T07:17:48.152Z] [INFO]: Credentials summary:
+[2026-11-20T07:17:48.152Z] [INFO]: Platform Super Admin: superadmin@grandstayhms.com / AdminPassword123!
+[2026-11-20T07:17:48.152Z] [INFO]: Hotel General Manager: admin@grandregal.com / HotelPassword123!
+[2026-11-20T07:17:48.152Z] [INFO]: Front Desk Reception: reception@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:48.152Z] [INFO]: Restaurant Chef: chef@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:48.152Z] [INFO]: Housekeeping: cleaning@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:48.152Z] [INFO]: Maintenance: tech@grandregal.com / StaffPassword123!
+
+ ÔØ» tests/api.test.js (17 tests | 2 failed) 4120ms
+   Ô£ô Hotel Management System - API Integration Tests > Authentication & Roles > GET /api/v1/health should return 200 healthy status 9ms
+   Ô£ô Hotel Management System - API Integration Tests > Authentication & Roles > GET /api/v1/auth/me returns authenticated user details 15ms
+   Ô£ô Hotel Management System - API Integration Tests > Authentication & Roles > Fails login with invalid credentials 105ms
+   Ô£ô Hotel Management System - API Integration Tests > Super Admin Platform Oversight > GET /api/v1/superadmin/stats returns platform statistics 46ms
+   Ô£ô Hotel Management System - API Integration Tests > Super Admin Platform Oversight > Non-super admin is forbidden from platform administration 8ms
+   Ô£ô Hotel Management System - API Integration Tests > Rooms & Availability > GET /api/v1/rooms lists tenant rooms 19ms
+   Ô£ô Hotel Management System - API Integration Tests > Rooms & Availability > GET /api/v1/rooms/availability detects available rooms for date range 38ms
+   Ô£ô Hotel Management System - API Integration Tests > Reservation Workflows & Conflict Prevention > POST /api/v1/reservations creates a valid booking and initial invoice 73ms
+   ├ù Hotel Management System - API Integration Tests > Reservation Workflows & Conflict Prevention > Check-In updates reservation status and sets room to occupied 18ms
+     ÔåÆ expected 400 to be 200 // Object.is equality
+   ├ù Hotel Management System - API Integration Tests > Reservation Workflows & Conflict Prevention > Check-Out updates reservation status and marks room as dirty 8ms
+     ÔåÆ expected 400 to be 200 // Object.is equality
+   Ô£ô Hotel Management System - API Integration Tests > Billing & Invoice Settlements > POST /api/v1/billing/invoices/record-payment records payment and settles balance 46ms
+   Ô£ô Hotel Management System - API Integration Tests > Housekeeping & F&B Operations > GET /api/v1/housekeeping/tasks returns housekeeping queue 20ms
+   Ô£ô Hotel Management System - API Integration Tests > Housekeeping & F&B Operations > allows housekeeping staff to assign tasks only to housekeeping staff 77ms
+   Ô£ô Hotel Management System - API Integration Tests > Housekeeping & F&B Operations > GET /api/v1/restaurant/menu returns categories and menu items 15ms
+   Ô£ô Hotel Management System - API Integration Tests > Expense access > lets platform administrators view all expenses without a hotel ID but prevents recording one 20ms
+   Ô£ô Hotel Management System - API Integration Tests > User permission management > lets a hotel admin override one staff member permission and enforces the change 80ms
+   Ô£ô Hotel Management System - API Integration Tests > AI Analytics & Business Insights > POST /api/v1/ai/query answers natural language questions using live DB data 24ms
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ» Failed Tests 2 ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+
+ FAIL  tests/api.test.js > Hotel Management System - API Integration Tests > Reservation Workflows & Conflict 
+Prevention > Check-In updates reservation status and sets room to occupied
+AssertionError: expected 400 to be 200 // Object.is equality
+
+- Expected
++ Received
+
+- 200
++ 400
+
+ ÔØ» tests/api.test.js:209:26
+    207|         .set('Authorization', `Bearer ${receptionistToken}`);
+    208| 
+    209|       expect(res.status).toBe(200);
+       |                          ^
+    210|       expect(res.body.data.status).toBe('checked_in');
+    211|     });
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[1/2]ÔÄ»
+
+ FAIL  tests/api.test.js > Hotel Management System - API Integration Tests > Reservation Workflows & Conflict 
+Prevention > Check-Out updates reservation status and marks room as dirty
+AssertionError: expected 400 to be 200 // Object.is equality
+
+- Expected
++ Received
+
+- 200
++ 400
+
+ ÔØ» tests/api.test.js:218:26
+    216|         .set('Authorization', `Bearer ${receptionistToken}`);
+    217| 
+    218|       expect(res.status).toBe(200);
+       |                          ^
+    219|       expect(res.body.data.status).toBe('checked_out');
+    220|     });
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[2/2]ÔÄ»
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 15 passed (17)
+   Start at  12:47:43
+   Duration  6.74s (transform 420ms, setup 0ms, collect 2.37s, tests 4.12s, environment 0ms, prepare 79ms)
+

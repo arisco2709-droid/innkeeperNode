@@ -1,0 +1,44 @@
+﻿node.exe : npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm 
+help npmrc` for supported config options.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...config options.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+ RUN  v3.2.7 C:/Users/ranjith/Documents/ink2/innkeeperNode
+
+(node:8948) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:8948) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | tests/api.test.js > Hotel Management System - API Integration Tests
+[2026-11-20T07:18:17.137Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:64514/?replicaSet=testset
+
+stderr | tests/api.test.js > Hotel Management System - API Integration Tests
+[2026-11-20T07:18:17.139Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | tests/api.test.js > Hotel Management System - API Integration Tests
+[2026-11-20T07:18:17.140Z] [INFO]: Starting database seeding...
+
+stdout | tests/api.test.js > Hotel Management System - API Integration Tests
+[2026-11-20T07:18:18.520Z] [INFO]: Database seeding completed successfully!
+[2026-11-20T07:18:18.520Z] [INFO]: Credentials summary:
+[2026-11-20T07:18:18.520Z] [INFO]: Platform Super Admin: superadmin@grandstayhms.com / AdminPassword123!
+[2026-11-20T07:18:18.520Z] [INFO]: Hotel General Manager: admin@grandregal.com / HotelPassword123!
+[2026-11-20T07:18:18.520Z] [INFO]: Front Desk Reception: reception@grandregal.com / StaffPassword123!
+[2026-11-20T07:18:18.520Z] [INFO]: Restaurant Chef: chef@grandregal.com / StaffPassword123!
+[2026-11-20T07:18:18.520Z] [INFO]: Housekeeping: cleaning@grandregal.com / StaffPassword123!
+[2026-11-20T07:18:18.521Z] [INFO]: Maintenance: tech@grandregal.com / StaffPassword123!
+
+ Ô£ô tests/api.test.js (17 tests) 4069ms
+
+ Test Files  1 passed (1)
+      Tests  17 passed (17)
+   Start at  12:48:13
+   Duration  6.66s (transform 409ms, setup 0ms, collect 2.35s, tests 4.07s, environment 0ms, prepare 81ms)
+

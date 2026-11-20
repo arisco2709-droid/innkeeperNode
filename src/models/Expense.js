@@ -1,5 +1,31 @@
 import mongoose from 'mongoose';
 
+export const LEGACY_EXPENSE_CATEGORIES = [
+  'salaries',
+  'electricity',
+  'water',
+  'internet',
+  'repairs',
+  'supplies',
+  'food_beverage',
+  'vendor_payment',
+  'marketing',
+  'miscellaneous'
+];
+
+export const LEGACY_EXPENSE_CATEGORY_LABELS = {
+  salaries: 'Salaries',
+  electricity: 'Electricity',
+  water: 'Water',
+  internet: 'Internet',
+  repairs: 'Repairs',
+  supplies: 'Supplies',
+  food_beverage: 'Food Beverage',
+  vendor_payment: 'Vendor Payment',
+  marketing: 'Marketing',
+  miscellaneous: 'Miscellaneous'
+};
+
 const expenseSchema = new mongoose.Schema({
   hotelId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -18,21 +44,11 @@ const expenseSchema = new mongoose.Schema({
     unique: true,
     index: true
   },
+  // Legacy enum slug OR custom ExpenseCategory code/name
   category: {
     type: String,
-    enum: [
-      'salaries',
-      'electricity',
-      'water',
-      'internet',
-      'repairs',
-      'supplies',
-      'food_beverage',
-      'vendor_payment',
-      'marketing',
-      'miscellaneous'
-    ],
     required: true,
+    trim: true,
     index: true
   },
   amount: {
@@ -66,9 +82,13 @@ const expenseSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'approved', 'rejected'],
-    default: 'approved',
+    enum: ['pending', 'approved', 'rejected', 'cancelled'],
+    default: 'pending',
     index: true
+  },
+  rejectionReason: {
+    type: String,
+    default: ''
   },
   approvedBy: {
     type: mongoose.Schema.Types.ObjectId,
@@ -83,4 +103,3 @@ const expenseSchema = new mongoose.Schema({
 });
 
 export const Expense = mongoose.models.Expense || mongoose.model('Expense', expenseSchema);
-

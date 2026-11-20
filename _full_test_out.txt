@@ -1,0 +1,646 @@
+﻿node.exe : npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm 
+help npmrc` for supported config options.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...config options.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+ RUN  v3.2.7 C:/Users/ranjith/Documents/ink2/innkeeperNode
+
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/inventoryWorkflow.test.js > raw material inventory workflow
+[2026-11-20T07:15:54.139Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:60283/?replicaSet=testset
+
+stderr | src/test/inventoryWorkflow.test.js > raw material inventory workflow
+[2026-11-20T07:15:54.140Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+ Ô£ô src/test/inventoryWorkflow.test.js (27 tests) 6116ms
+   Ô£ô raw material inventory workflow > transfers raw-material batches and balance between departments  581ms
+   Ô£ô raw material inventory workflow > accounts for partial goods receipts and requires supplier review before approval  693ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/rawMaterialController.test.js > raw material master API
+[2026-11-20T07:16:00.291Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:60415/?replicaSet=testset
+
+stderr | src/test/rawMaterialController.test.js > raw material master API
+[2026-11-20T07:16:00.291Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+ Ô£ô src/test/rawMaterialController.test.js (7 tests) 4462ms
+   Ô£ô raw material master API > creates hotel-scoped categories and filters subcategories by category  466ms
+   Ô£ô raw material master API > validates material-specific package conversions and snapshots purchase conversion history  1065ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/recipeInventory.test.js > recipe-based inventory management
+[2026-11-20T07:16:05.091Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:60550/?replicaSet=testset
+stderr | src/test/recipeInventory.test.js > recipe-based inventory management
+[2026-11-20T07:16:05.091Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+
+ Ô£ô src/test/recipeInventory.test.js (10 tests) 3927ms
+   Ô£ô recipe-based inventory management > deducts recipe ingredients at the configured stage, uses FEFO batches, and reverses cancellation  717ms
+   Ô£ô recipe-based inventory management > records batch production once, allocates prepared portions at serving, and keeps wastage separate  406ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/restaurantTables.test.js
+[2026-11-20T07:16:10.990Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:60696/?replicaSet=testset
+
+stderr | src/test/restaurantTables.test.js
+[2026-11-20T07:16:10.990Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | src/test/restaurantTables.test.js
+[2026-11-20T07:16:10.991Z] [INFO]: Starting database seeding...
+
+stdout | src/test/restaurantTables.test.js
+[2026-11-20T07:16:12.376Z] [INFO]: Database seeding completed successfully!
+[2026-11-20T07:16:12.376Z] [INFO]: Credentials summary:
+[2026-11-20T07:16:12.376Z] [INFO]: Platform Super Admin: superadmin@grandstayhms.com / AdminPassword123!
+[2026-11-20T07:16:12.376Z] [INFO]: Hotel General Manager: admin@grandregal.com / HotelPassword123!
+[2026-11-20T07:16:12.376Z] [INFO]: Front Desk Reception: reception@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:12.376Z] [INFO]: Restaurant Chef: chef@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:12.376Z] [INFO]: Housekeeping: cleaning@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:12.376Z] [INFO]: Maintenance: tech@grandregal.com / StaffPassword123!
+
+ Ô£ô src/test/restaurantTables.test.js (14 tests) 8744ms
+   Ô£ô Restaurant table management and POS assignment > atomically assigns one table, preserves its snapshot, and releases only after settlement  363ms
+   Ô£ô Restaurant table management and POS assignment > releases a table when its dine-in order is cancelled  411ms
+   Ô£ô Restaurant table management and POS assignment > lets only hotel admins archive prior-day closed bills and preserves unpaid bills  389ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/reservations.test.js
+[2026-11-20T07:16:20.363Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:61038/?replicaSet=testset
+
+stderr | src/test/reservations.test.js
+[2026-11-20T07:16:20.363Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | src/test/reservations.test.js
+[2026-11-20T07:16:20.364Z] [INFO]: Starting database seeding...
+
+stdout | src/test/reservations.test.js
+[2026-11-20T07:16:21.704Z] [INFO]: Database seeding completed successfully!
+[2026-11-20T07:16:21.704Z] [INFO]: Credentials summary:
+[2026-11-20T07:16:21.704Z] [INFO]: Platform Super Admin: superadmin@grandstayhms.com / AdminPassword123!
+[2026-11-20T07:16:21.704Z] [INFO]: Hotel General Manager: admin@grandregal.com / HotelPassword123!
+[2026-11-20T07:16:21.704Z] [INFO]: Front Desk Reception: reception@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:21.704Z] [INFO]: Restaurant Chef: chef@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:21.704Z] [INFO]: Housekeeping: cleaning@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:21.704Z] [INFO]: Maintenance: tech@grandregal.com / StaffPassword123!
+
+stdout | src/test/reservations.test.js > Reservation request approval workflow > allows an authorized hotel admin to approve once and records the actor
+[2026-11-20T07:16:22.958Z] [INFO]: [Email Service Simulation] To: approve.request@example.com | Subject: Reservation GDH-20261120-021622-0E670E02 approved
+
+stdout | src/test/reservations.test.js > Reservation request approval workflow > requires a rejection reason and allows a receptionist to reject
+[2026-11-20T07:16:23.050Z] [INFO]: [Email Service Simulation] To: reject.request@example.com | Subject: Reservation ETA-20261120-021622-42E134EA rejected
+
+ Ô£ô src/test/reservations.test.js (23 tests) 3920ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/housekeeping.test.js
+[2026-11-20T07:16:24.575Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:61278/?replicaSet=testset
+
+stderr | src/test/housekeeping.test.js
+[2026-11-20T07:16:24.575Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | src/test/housekeeping.test.js
+[2026-11-20T07:16:24.575Z] [INFO]: Starting database seeding...
+
+stdout | src/test/housekeeping.test.js
+[2026-11-20T07:16:25.981Z] [INFO]: Database seeding completed successfully!
+[2026-11-20T07:16:25.981Z] [INFO]: Credentials summary:
+[2026-11-20T07:16:25.981Z] [INFO]: Platform Super Admin: superadmin@grandstayhms.com / AdminPassword123!
+[2026-11-20T07:16:25.981Z] [INFO]: Hotel General Manager: admin@grandregal.com / HotelPassword123!
+[2026-11-20T07:16:25.981Z] [INFO]: Front Desk Reception: reception@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:25.981Z] [INFO]: Restaurant Chef: chef@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:25.981Z] [INFO]: Housekeeping: cleaning@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:25.981Z] [INFO]: Maintenance: tech@grandregal.com / StaffPassword123!
+
+ Ô£ô src/test/housekeeping.test.js (12 tests) 3879ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | tests/api.test.js > Hotel Management System - API Integration Tests
+[2026-11-20T07:16:28.807Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:61477/?replicaSet=testset
+
+stderr | tests/api.test.js > Hotel Management System - API Integration Tests
+[2026-11-20T07:16:28.807Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | tests/api.test.js > Hotel Management System - API Integration Tests
+[2026-11-20T07:16:28.807Z] [INFO]: Starting database seeding...
+
+stdout | tests/api.test.js > Hotel Management System - API Integration Tests
+[2026-11-20T07:16:30.165Z] [INFO]: Database seeding completed successfully!
+[2026-11-20T07:16:30.165Z] [INFO]: Credentials summary:
+[2026-11-20T07:16:30.165Z] [INFO]: Platform Super Admin: superadmin@grandstayhms.com / AdminPassword123!
+[2026-11-20T07:16:30.165Z] [INFO]: Hotel General Manager: admin@grandregal.com / HotelPassword123!
+[2026-11-20T07:16:30.165Z] [INFO]: Front Desk Reception: reception@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:30.165Z] [INFO]: Restaurant Chef: chef@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:30.165Z] [INFO]: Housekeeping: cleaning@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:30.165Z] [INFO]: Maintenance: tech@grandregal.com / StaffPassword123!
+
+ ÔØ» tests/api.test.js (17 tests | 4 failed) 5095ms
+   Ô£ô Hotel Management System - API Integration Tests > Authentication & Roles > GET /api/v1/health should return 200 healthy status 4ms
+   Ô£ô Hotel Management System - API Integration Tests > Authentication & Roles > GET /api/v1/auth/me returns authenticated user details 13ms
+   Ô£ô Hotel Management System - API Integration Tests > Authentication & Roles > Fails login with invalid credentials 79ms
+   Ô£ô Hotel Management System - API Integration Tests > Super Admin Platform Oversight > GET /api/v1/superadmin/stats returns platform statistics 35ms
+   Ô£ô Hotel Management System - API Integration Tests > Super Admin Platform Oversight > Non-super admin is forbidden from platform administration 6ms
+   Ô£ô Hotel Management System - API Integration Tests > Rooms & Availability > GET /api/v1/rooms lists tenant rooms 13ms
+   Ô£ô Hotel Management System - API Integration Tests > Rooms & Availability > GET /api/v1/rooms/availability detects available rooms for date range 15ms
+   ├ù Hotel Management System - API Integration Tests > Reservation Workflows & Conflict Prevention > POST /api/v1/reservations creates a valid booking and initial invoice 51ms
+     ÔåÆ expected 'DGEE-20261120-021630-D856C69A' to match /^BK-\d{4}-[A-F0-9]{6}$/
+   ├ù Hotel Management System - API Integration Tests > Reservation Workflows & Conflict Prevention > Check-In updates reservation status and sets room to occupied 11ms
+     ÔåÆ expected 404 to be 200 // Object.is equality
+   ├ù Hotel Management System - API Integration Tests > Reservation Workflows & Conflict Prevention > Check-Out updates reservation status and marks room as dirty 8ms
+     ÔåÆ expected 404 to be 200 // Object.is equality
+   ├ù Hotel Management System - API Integration Tests > Billing & Invoice Settlements > POST /api/v1/billing/invoices/record-payment records payment and settles balance 14ms
+     ÔåÆ Cannot read properties of undefined (reading 'balanceAmount')
+   Ô£ô Hotel Management System - API Integration Tests > Housekeeping & F&B Operations > GET /api/v1/housekeeping/tasks returns housekeeping queue 10ms
+   Ô£ô Hotel Management System - API Integration Tests > Housekeeping & F&B Operations > allows housekeeping staff to assign tasks only to housekeeping staff 60ms
+   Ô£ô Hotel Management System - API Integration Tests > Housekeeping & F&B Operations > GET /api/v1/restaurant/menu returns categories and menu items 13ms
+   Ô£ô Hotel Management System - API Integration Tests > Expense access > lets platform administrators view all expenses without a hotel ID but prevents recording one 19ms
+   Ô£ô Hotel Management System - API Integration Tests > User permission management > lets a hotel admin override one staff member permission and enforces the change 80ms
+   Ô£ô Hotel Management System - API Integration Tests > AI Analytics & Business Insights > POST /api/v1/ai/query answers natural language questions using live DB data 22ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/billing.test.js
+[2026-11-20T07:16:34.299Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:61670/?replicaSet=testset
+
+stderr | src/test/billing.test.js
+[2026-11-20T07:16:34.299Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | src/test/billing.test.js
+[2026-11-20T07:16:34.299Z] [INFO]: Starting database seeding...
+
+stdout | src/test/billing.test.js
+[2026-11-20T07:16:35.671Z] [INFO]: Database seeding completed successfully!
+[2026-11-20T07:16:35.671Z] [INFO]: Credentials summary:
+[2026-11-20T07:16:35.671Z] [INFO]: Platform Super Admin: superadmin@grandstayhms.com / AdminPassword123!
+[2026-11-20T07:16:35.671Z] [INFO]: Hotel General Manager: admin@grandregal.com / HotelPassword123!
+[2026-11-20T07:16:35.671Z] [INFO]: Front Desk Reception: reception@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:35.671Z] [INFO]: Restaurant Chef: chef@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:35.671Z] [INFO]: Housekeeping: cleaning@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:35.671Z] [INFO]: Maintenance: tech@grandregal.com / StaffPassword123!
+
+stderr | src/test/billing.test.js > POST /api/v1/billing/payments/refund > records partial refunds, caps the remaining 
+refund, and updates payment and invoice balances
+[2026-11-20T07:16:35.969Z] [ERROR]: Refund amount exceeds the refundable balance of $70.00. {
+  stack: 'Error: Refund amount exceeds the refundable balance of $70.00.\n' +
+    '    at C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\src\\controllers\\billingController.js:363:26\n' +
+    '    at processTicksAndRejections (node:internal/process/task_queues:104:5)\n' +
+    '    at ClientSession.withTransaction (C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\node_modules\\mongoose\\
+node_modules\\mongodb\\src\\sessions.ts:750:20)\n' +
+    '    at refundPayment 
+(C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\src\\controllers\\billingController.js:338:5)',
+  path: '/api/v1/billing/payments/refund',
+  method: 'POST'
+}
+
+ Ô£ô src/test/billing.test.js (15 tests) 2838ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/attendance.test.js
+[2026-11-20T07:16:37.465Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:61846/?replicaSet=testset
+
+stderr | src/test/attendance.test.js
+[2026-11-20T07:16:37.465Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | src/test/attendance.test.js
+[2026-11-20T07:16:37.465Z] [INFO]: Starting database seeding...
+
+stdout | src/test/attendance.test.js
+[2026-11-20T07:16:38.875Z] [INFO]: Database seeding completed successfully!
+[2026-11-20T07:16:38.875Z] [INFO]: Credentials summary:
+[2026-11-20T07:16:38.875Z] [INFO]: Platform Super Admin: superadmin@grandstayhms.com / AdminPassword123!
+[2026-11-20T07:16:38.875Z] [INFO]: Hotel General Manager: admin@grandregal.com / HotelPassword123!
+[2026-11-20T07:16:38.875Z] [INFO]: Front Desk Reception: reception@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:38.875Z] [INFO]: Restaurant Chef: chef@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:38.875Z] [INFO]: Housekeeping: cleaning@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:38.875Z] [INFO]: Maintenance: tech@grandregal.com / StaffPassword123!
+
+ Ô£ô src/test/attendance.test.js (9 tests) 3874ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stderr | src/test/procurementWorkflow.test.js > end-to-end procurement workflow
+stdout | src/test/procurementWorkflow.test.js > end-to-end procurement workflow
+[2026-11-20T07:16:41.485Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:62045/?replicaSet=testset
+[2026-11-20T07:16:41.485Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+
+ Ô£ô src/test/procurementWorkflow.test.js (1 test) 2675ms
+   Ô£ô end-to-end procurement workflow > keeps uninspected goods out of stock and reconciles inspection, invoice, credit and payment  1150ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/leaveWorkflow.test.js
+[2026-11-20T07:16:44.569Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:62167/?replicaSet=testset
+
+stderr | src/test/leaveWorkflow.test.js
+[2026-11-20T07:16:44.569Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | src/test/leaveWorkflow.test.js
+[2026-11-20T07:16:44.569Z] [INFO]: Starting database seeding...
+
+stdout | src/test/leaveWorkflow.test.js
+[2026-11-20T07:16:45.965Z] [INFO]: Database seeding completed successfully!
+[2026-11-20T07:16:45.965Z] [INFO]: Credentials summary:
+[2026-11-20T07:16:45.965Z] [INFO]: Platform Super Admin: superadmin@grandstayhms.com / AdminPassword123!
+[2026-11-20T07:16:45.965Z] [INFO]: Hotel General Manager: admin@grandregal.com / HotelPassword123!
+[2026-11-20T07:16:45.965Z] [INFO]: Front Desk Reception: reception@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:45.965Z] [INFO]: Restaurant Chef: chef@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:45.965Z] [INFO]: Housekeeping: cleaning@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:45.965Z] [INFO]: Maintenance: tech@grandregal.com / StaffPassword123!
+
+ Ô£ô src/test/leaveWorkflow.test.js (4 tests) 6075ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/superadmin.test.js
+[2026-11-20T07:16:51.036Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:62353/?replicaSet=testset
+
+stderr | src/test/superadmin.test.js
+[2026-11-20T07:16:51.037Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | src/test/superadmin.test.js
+[2026-11-20T07:16:51.037Z] [INFO]: Starting database seeding...
+
+stdout | src/test/superadmin.test.js
+[2026-11-20T07:16:52.541Z] [INFO]: Database seeding completed successfully!
+[2026-11-20T07:16:52.541Z] [INFO]: Credentials summary:
+[2026-11-20T07:16:52.541Z] [INFO]: Platform Super Admin: superadmin@grandstayhms.com / AdminPassword123!
+[2026-11-20T07:16:52.541Z] [INFO]: Hotel General Manager: admin@grandregal.com / HotelPassword123!
+[2026-11-20T07:16:52.541Z] [INFO]: Front Desk Reception: reception@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:52.541Z] [INFO]: Restaurant Chef: chef@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:52.541Z] [INFO]: Housekeeping: cleaning@grandregal.com / StaffPassword123!
+[2026-11-20T07:16:52.541Z] [INFO]: Maintenance: tech@grandregal.com / StaffPassword123!
+
+stdout | src/test/superadmin.test.js > PATCH /api/v1/superadmin/hotels/:id/status > should approve (activate) a pending hotel
+[2026-11-20T07:16:52.954Z] [INFO]: [Email Service Simulation] To: pending.owner@pendinghotel.test | Subject: Welcome to Nestnn - Hotel Application Received
+
+stdout | src/test/superadmin.test.js > PATCH /api/v1/superadmin/hotels/:id/status > should approve (activate) a pending hotel
+[2026-11-20T07:16:52.978Z] [INFO]: [Email Service Simulation] To: pending.owner@pendinghotel.test | Subject: Nestnn ÔÇö Hotel Account Update: Pending Approval Hotel
+
+stdout | src/test/superadmin.test.js > PATCH /api/v1/superadmin/hotels/:id/status > should reject hotel with reason
+[2026-11-20T07:16:53.108Z] [INFO]: [Email Service Simulation] To: reject.owner@rejecthotel.test | Subject: Welcome to Nestnn - Hotel Application Received
+
+stdout | src/test/superadmin.test.js > PATCH /api/v1/superadmin/hotels/:id/status > should reject hotel with reason
+[2026-11-20T07:16:53.133Z] [INFO]: [Email Service Simulation] To: reject.owner@rejecthotel.test | Subject: Nestnn ÔÇö Hotel Account Update: Hotel To Reject
+
+ Ô£ô src/test/superadmin.test.js (13 tests) 5841ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/auth.test.js
+[2026-11-20T07:16:57.150Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:62523/?replicaSet=testset
+
+stderr | src/test/auth.test.js
+[2026-11-20T07:16:57.150Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | src/test/auth.test.js > POST /api/v1/auth/register > should register a new hotel and return tokens
+[2026-11-20T07:16:57.718Z] [INFO]: [Email Service Simulation] To: testadmin@grandtest.com | Subject: Welcome to Nestnn - Hotel Application Received
+
+stdout | src/test/auth.test.js > POST /api/v1/auth/forgot-password > should return a devResetToken in non-production mode
+[2026-11-20T07:16:58.880Z] [INFO]: [Email Service Simulation] To: testadmin@grandtest.com | Subject: Password Reset Request - Nestnn
+
+ Ô£ô src/test/auth.test.js (13 tests) 2668ms
+   Ô£ô POST /api/v1/auth/register > should register a new hotel and return tokens  571ms
+   Ô£ô POST /api/v1/auth/login > should reject guest accounts from the staff portal  326ms
+   Ô£ô POST /api/v1/auth/refresh > should not rotate a refresh token that belongs to a different account during migration  333ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/subscription.test.js
+[2026-11-20T07:17:00.134Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:62654/?replicaSet=testset
+
+stderr | src/test/subscription.test.js
+[2026-11-20T07:17:00.134Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | src/test/subscription.test.js
+[2026-11-20T07:17:00.135Z] [INFO]: Starting database seeding...
+
+stdout | src/test/subscription.test.js
+[2026-11-20T07:17:01.610Z] [INFO]: Database seeding completed successfully!
+[2026-11-20T07:17:01.610Z] [INFO]: Credentials summary:
+[2026-11-20T07:17:01.610Z] [INFO]: Platform Super Admin: superadmin@grandstayhms.com / AdminPassword123!
+[2026-11-20T07:17:01.610Z] [INFO]: Hotel General Manager: admin@grandregal.com / HotelPassword123!
+[2026-11-20T07:17:01.610Z] [INFO]: Front Desk Reception: reception@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:01.610Z] [INFO]: Restaurant Chef: chef@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:01.610Z] [INFO]: Housekeeping: cleaning@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:01.610Z] [INFO]: Maintenance: tech@grandregal.com / StaffPassword123!
+
+stdout | src/test/subscription.test.js > approval-first module subscriptions > blocks module access and subscription options until the hotel is approved
+[2026-11-20T07:17:01.908Z] [INFO]: [Email Service Simulation] To: subscription-owner@example.test | Subject: Welcome to Nestnn - Hotel Application Received
+
+stdout | src/test/subscription.test.js > approval-first module subscriptions > blocks module access and subscription options until the hotel is approved
+[2026-11-20T07:17:01.952Z] [INFO]: [Email Service Simulation] To: subscription-owner@example.test | Subject: Nestnn ÔÇö Hotel Account Update: Subscription Test Hotel
+
+ Ô£ô src/test/subscription.test.js (3 tests) 3912ms
+   Ô£ô approval-first module subscriptions > blocks module access and subscription options until the hotel is approved  359ms
+   Ô£ô approval-first module subscriptions > calculates server-side prices with the minimum rather than adding a base fee  414ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/storageLocation.test.js > storage location master
+[2026-11-20T07:17:04.333Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:62852/?replicaSet=testset
+
+stderr | src/test/storageLocation.test.js > storage location master
+[2026-11-20T07:17:04.333Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+ Ô£ô src/test/storageLocation.test.js (3 tests) 1720ms
+   Ô£ô storage location master > creates predefined types and backfills legacy location references without changing stock  615ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/rooms.test.js
+[2026-11-20T07:17:06.243Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:62958/?replicaSet=testset
+
+stderr | src/test/rooms.test.js
+[2026-11-20T07:17:06.243Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | src/test/rooms.test.js
+[2026-11-20T07:17:06.243Z] [INFO]: Starting database seeding...
+
+stdout | src/test/rooms.test.js
+[2026-11-20T07:17:07.581Z] [INFO]: Database seeding completed successfully!
+[2026-11-20T07:17:07.581Z] [INFO]: Credentials summary:
+[2026-11-20T07:17:07.581Z] [INFO]: Platform Super Admin: superadmin@grandstayhms.com / AdminPassword123!
+[2026-11-20T07:17:07.581Z] [INFO]: Hotel General Manager: admin@grandregal.com / HotelPassword123!
+[2026-11-20T07:17:07.581Z] [INFO]: Front Desk Reception: reception@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:07.581Z] [INFO]: Restaurant Chef: chef@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:07.581Z] [INFO]: Housekeeping: cleaning@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:07.581Z] [INFO]: Maintenance: tech@grandregal.com / StaffPassword123!
+
+stderr | src/test/rooms.test.js > POST /api/v1/room-types > should reject duplicate room type code
+[2026-11-20T07:17:07.706Z] [ERROR]: E11000 duplicate key error collection: test.roomtypes index: hotelId_1_code_1 dup 
+key: { hotelId: ObjectId('6afff3f21aad758262028f60'), code: "ATS" } {
+  stack: `MongoServerError: E11000 duplicate key error collection: test.roomtypes index: hotelId_1_code_1 dup key: { 
+hotelId: ObjectId('6afff3f21aad758262028f60'), code: "ATS" }\n` +
+    '    at InsertOneOperation.handleOk (C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\node_modules\\mongoose\\no
+de_modules\\mongodb\\src\\operations\\insert.ts:79:13)\n' +
+    '    at tryOperation (C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\node_modules\\mongoose\\node_modules\\mon
+godb\\src\\operations\\execute_operation.ts:290:26)\n' +
+    '    at processTicksAndRejections (node:internal/process/task_queues:104:5)\n' +
+    '    at executeOperation (C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\node_modules\\mongoose\\node_modules\
+\mongodb\\src\\operations\\execute_operation.ts:119:12)\n' +
+    '    at Collection.insertOne (C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\node_modules\\mongoose\\node_modu
+les\\mongodb\\src\\collection.ts:294:12)',
+  path: '/api/v1/room-types',
+  method: 'POST'
+}
+
+stderr | src/test/rooms.test.js > POST /api/v1/room-types > should reject duplicate room type code
+[2026-11-20T07:17:07.716Z] [ERROR]: E11000 duplicate key error collection: test.roomtypes index: hotelId_1_code_1 dup 
+key: { hotelId: ObjectId('6afff3f21aad758262028f60'), code: "ATS" } {
+  stack: `MongoServerError: E11000 duplicate key error collection: test.roomtypes index: hotelId_1_code_1 dup key: { 
+hotelId: ObjectId('6afff3f21aad758262028f60'), code: "ATS" }\n` +
+    '    at InsertOneOperation.handleOk (C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\node_modules\\mongoose\\no
+de_modules\\mongodb\\src\\operations\\insert.ts:79:13)\n' +
+    '    at tryOperation (C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\node_modules\\mongoose\\node_modules\\mon
+godb\\src\\operations\\execute_operation.ts:290:26)\n' +
+    '    at processTicksAndRejections (node:internal/process/task_queues:104:5)\n' +
+    '    at executeOperation (C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\node_modules\\mongoose\\node_modules\
+\mongodb\\src\\operations\\execute_operation.ts:119:12)\n' +
+    '    at Collection.insertOne (C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\node_modules\\mongoose\\node_modu
+les\\mongodb\\src\\collection.ts:294:12)',
+  path: '/api/v1/room-types',
+  method: 'POST'
+}
+
+stderr | src/test/rooms.test.js > PUT /api/v1/room-types/:id > rejects invalid category prices
+[2026-11-20T07:17:07.740Z] [ERROR]: Validation failed: basePrice: Path `basePrice` (-1) is less than minimum allowed 
+value (0). {
+  stack: 'ValidationError: Validation failed: basePrice: Path `basePrice` (-1) is less than minimum allowed value 
+(0).\n' +
+    '    at _done (C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\node_modules\\mongoose\\lib\\helpers\\updateVali
+dators.js:227:19)\n' +
+    '    at C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\node_modules\\mongoose\\lib\\helpers\\updateValidators.
+js:203:11\n' +
+    '    at schemaPath.doValidate.updateValidator (C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\node_modules\\mo
+ngoose\\lib\\helpers\\updateValidators.js:161:13)\n' +
+    '    at C:\\Users\\ranjith\\Documents\\ink2\\innkeeperNode\\node_modules\\mongoose\\lib\\schemaType.js:1443:9\n' +
+    '    at processTicksAndRejections (node:internal/process/task_queues:85:11)',
+  path: '/api/v1/room-types/6afff3f31aad7582620290af',
+  method: 'PUT'
+}
+
+ Ô£ô src/test/rooms.test.js (11 tests) 2709ms
+ Ô£ô src/test/payrollFormulas.test.js (9 tests) 7ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/inventoryUnitController.test.js > inventory unit management API
+[2026-11-20T07:17:09.183Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:63126/?replicaSet=testset
+
+stderr | src/test/inventoryUnitController.test.js > inventory unit management API
+[2026-11-20T07:17:09.183Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+ Ô£ô src/test/inventoryUnitController.test.js (4 tests) 1610ms
+   Ô£ô inventory unit management API > creates hotel-scoped units and prevents duplicate names or symbols  458ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+ Ô£ô src/test/permissions.test.js (7 tests) 6ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/notifications.test.js
+[2026-11-20T07:17:11.275Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:63219/?replicaSet=testset
+
+stderr | src/test/notifications.test.js
+[2026-11-20T07:17:11.275Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | src/test/notifications.test.js
+[2026-11-20T07:17:11.276Z] [INFO]: Starting database seeding...
+
+stdout | src/test/notifications.test.js
+[2026-11-20T07:17:12.833Z] [INFO]: Database seeding completed successfully!
+[2026-11-20T07:17:12.833Z] [INFO]: Credentials summary:
+[2026-11-20T07:17:12.833Z] [INFO]: Platform Super Admin: superadmin@grandstayhms.com / AdminPassword123!
+[2026-11-20T07:17:12.833Z] [INFO]: Hotel General Manager: admin@grandregal.com / HotelPassword123!
+[2026-11-20T07:17:12.833Z] [INFO]: Front Desk Reception: reception@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:12.833Z] [INFO]: Restaurant Chef: chef@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:12.833Z] [INFO]: Housekeeping: cleaning@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:12.833Z] [INFO]: Maintenance: tech@grandregal.com / StaffPassword123!
+
+ Ô£ô src/test/notifications.test.js (2 tests) 4423ms
+ Ô£ô src/test/inventoryUnits.test.js (4 tests) 2ms
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:12916) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/guests.test.js
+[2026-11-20T07:17:16.126Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:64124/?replicaSet=testset
+
+stderr | src/test/guests.test.js
+[2026-11-20T07:17:16.126Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+stdout | src/test/guests.test.js
+[2026-11-20T07:17:16.127Z] [INFO]: Starting database seeding...
+
+stdout | src/test/guests.test.js
+[2026-11-20T07:17:17.555Z] [INFO]: Database seeding completed successfully!
+[2026-11-20T07:17:17.555Z] [INFO]: Credentials summary:
+[2026-11-20T07:17:17.555Z] [INFO]: Platform Super Admin: superadmin@grandstayhms.com / AdminPassword123!
+[2026-11-20T07:17:17.555Z] [INFO]: Hotel General Manager: admin@grandregal.com / HotelPassword123!
+[2026-11-20T07:17:17.555Z] [INFO]: Front Desk Reception: reception@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:17.555Z] [INFO]: Restaurant Chef: chef@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:17.555Z] [INFO]: Housekeeping: cleaning@grandregal.com / StaffPassword123!
+[2026-11-20T07:17:17.555Z] [INFO]: Maintenance: tech@grandregal.com / StaffPassword123!
+
+ Ô£ô src/test/guests.test.js (2 tests) 2750ms
+ Ô£ô src/test/phoneValidator.test.js (4 tests) 3ms
+ Ô£ô src/test/reservationReference.test.js (2 tests) 3ms
+ Ô£ô src/test/inventoryUnitModel.test.js (2 tests) 4ms
+ Ô£ô src/test/reservationDates.test.js (2 tests) 3ms
+ Ô£ô src/test/currency.test.js (1 test) 1ms
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ» Failed Tests 4 ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+
+ FAIL  tests/api.test.js > Hotel Management System - API Integration Tests > Reservation Workflows & Conflict 
+Prevention > POST /api/v1/reservations creates a valid booking and initial invoice
+AssertionError: expected 'DGEE-20261120-021630-D856C69A' to match /^BK-\d{4}-[A-F0-9]{6}$/
+
+- Expected: 
+/^BK-\d{4}-[A-F0-9]{6}$/
+
++ Received: 
+"DGEE-20261120-021630-D856C69A"
+
+ ÔØ» tests/api.test.js:177:58
+    175|       expect(res.status).toBe(201);
+    176|       expect(res.body.success).toBe(true);
+    177|       expect(res.body.data.reservation.bookingReference).toMatch(/^BK-ÔÇª
+       |                                                          ^
+    178| 
+    179|       testReservationId = res.body.data.reservation._id;
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[1/4]ÔÄ»
+
+ FAIL  tests/api.test.js > Hotel Management System - API Integration Tests > Reservation Workflows & Conflict 
+Prevention > Check-In updates reservation status and sets room to occupied
+AssertionError: expected 404 to be 200 // Object.is equality
+
+- Expected
++ Received
+
+- 200
++ 404
+
+ ÔØ» tests/api.test.js:209:26
+    207|         .set('Authorization', `Bearer ${receptionistToken}`);
+    208| 
+    209|       expect(res.status).toBe(200);
+       |                          ^
+    210|       expect(res.body.data.status).toBe('checked_in');
+    211|     });
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[2/4]ÔÄ»
+
+ FAIL  tests/api.test.js > Hotel Management System - API Integration Tests > Reservation Workflows & Conflict 
+Prevention > Check-Out updates reservation status and marks room as dirty
+AssertionError: expected 404 to be 200 // Object.is equality
+
+- Expected
++ Received
+
+- 200
++ 404
+
+ ÔØ» tests/api.test.js:218:26
+    216|         .set('Authorization', `Bearer ${receptionistToken}`);
+    217| 
+    218|       expect(res.status).toBe(200);
+       |                          ^
+    219|       expect(res.body.data.status).toBe('checked_out');
+    220|     });
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[3/4]ÔÄ»
+
+ FAIL  tests/api.test.js > Hotel Management System - API Integration Tests > Billing & Invoice Settlements > POST 
+/api/v1/billing/invoices/record-payment records payment and settles balance
+TypeError: Cannot read properties of undefined (reading 'balanceAmount')
+ ÔØ» tests/api.test.js:231:35
+    229| 
+    230|       const invoice = invRes.body.data.invoice;
+    231|       const amountToPay = invoice.balanceAmount;
+       |                                   ^
+    232| 
+    233|       const payRes = await request(app)
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[4/4]ÔÄ»
+
+
+ Test Files  1 failed | 26 passed (27)
+      Tests  4 failed | 217 passed (221)
+   Start at  12:45:52
+   Duration  86.37s (transform 843ms, setup 0ms, collect 8.73s, tests 77.27s, environment 0ms, prepare 88ms)
+

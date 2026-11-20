@@ -1,0 +1,107 @@
+﻿
+> hms-server@1.0.0 test
+> vitest run --run src/test/rawMaterialController.test.js src/test/recipeInventory.test.js
+
+
+ RUN  v3.2.7 C:/Users/ranjith/Documents/ink2/innkeeperNode
+
+node.exe : (node:30968) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. 
+You are allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a 
+schema option.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ((node:30968) [M... schema option.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:30968) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/recipeInventory.test.js > recipe-based inventory management
+[2026-11-20T07:04:54.159Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:61227/?replicaSet=testset
+
+stderr | src/test/recipeInventory.test.js > recipe-based inventory management
+[2026-11-20T07:04:54.160Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+ ÔØ» src/test/recipeInventory.test.js (10 tests | 1 failed) 4753ms
+   Ô£ô recipe-based inventory management > keeps individual and bulk recipe activation separate for the same menu item 221ms
+   Ô£ô recipe-based inventory management > previews recipe ingredient usage from current batches and includes purchase details 153ms
+   Ô£ô recipe-based inventory management > applies configured percentage and flat menu discounts and snapshots them on the bill 95ms
+   Ô£ô recipe-based inventory management > deducts recipe ingredients at the configured stage, uses FEFO batches, and reverses cancellation  780ms
+   Ô£ô recipe-based inventory management > leaves the kitchen order unchanged when recipe stock is insufficient 153ms
+   Ô£ô recipe-based inventory management > uses the served deduction stage when configured and does not affect orders without recipes 155ms
+   Ô£ô recipe-based inventory management > records batch production once, allocates prepared portions at serving, and keeps wastage separate  486ms
+   Ô£ô recipe-based inventory management > records complimentary raw materials and unrecorded made-to-order menu usage with idempotent stock deductions 137ms
+   ├ù recipe-based inventory management > grosses up recipe ingredient quantities by expected preparation loss for raw materials 87ms
+     ÔåÆ expected 7.8494623699999995 to be 7.84946237 // Object.is equality
+   Ô£ô recipe-based inventory management > calculates full-recipe costs from purchase prices and inventory batches, and reports missing costs as pending 106ms
+(node:30968) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+(node:30968) [MONGOOSE] Warning: `errors` is a reserved schema pathname and may break some functionality. You are 
+allowed to use it, but use at your own risk. To disable this warning pass `suppressReservedKeysWarning` as a schema 
+option.
+stdout | src/test/rawMaterialController.test.js > raw material master API
+stderr | src/test/rawMaterialController.test.js > raw material master API
+[2026-11-20T07:04:58.175Z] [WARN]: In-memory database is ephemeral. Set a reachable MONGODB_URI to persist data.
+
+[2026-11-20T07:04:58.175Z] [INFO]: Connected to in-memory MongoDB: mongodb://127.0.0.1:61371/?replicaSet=testset
+
+ ÔØ» src/test/rawMaterialController.test.js (7 tests | 1 failed) 4933ms
+   Ô£ô raw material master API > creates hotel-scoped categories and filters subcategories by category  576ms
+   Ô£ô raw material master API > validates material-specific package conversions and snapshots purchase conversion history  1000ms
+   Ô£ô raw material master API > blocks unconfigured or incomplete raw-material receipts and records a converted purchase 225ms
+   Ô£ô raw material master API > deactivates unused raw materials and blocks delete when stock or history exists 101ms
+   Ô£ô raw material master API > rejects duplicate vendor names case-insensitively per hotel 15ms
+   Ô£ô raw material master API > applies tax and discount on receipt movements and supports cancel/correct 129ms
+   ├ù raw material master API > cancels a transfer and reverses both locations once 41ms
+     ÔåÆ This transfer cannot be cancelled because destination stock is no longer available to reverse.
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ» Failed Tests 2 ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»
+
+ FAIL  src/test/rawMaterialController.test.js > raw material master API > cancels a transfer and reverses both 
+locations once
+Error: This transfer cannot be cancelled because destination stock is no longer available to reverse.
+ ÔØ» cancelTransfer src/services/inventoryService.js:2433:25
+    2431|   }
+    2432|   if (remainingToMove > 1e-8) {
+    2433|     throw Object.assign(new Error(
+       |                         ^
+    2434|       'This transfer cannot be cancelled because destination stock is ÔÇª
+    2435|     ), { statusCode: 409 });
+ ÔØ» src/services/inventoryService.js:1844:16
+ ÔØ» ClientSession.withTransaction node_modules/mongoose/node_modules/mongodb/src/sessions.ts:750:20
+ ÔØ» runInventoryTransaction src/services/inventoryService.js:1843:5
+ ÔØ» cancelStockTransfer src/controllers/inventoryAdvancedController.js:762:20
+ ÔØ» invoke src/test/rawMaterialController.test.js:60:3
+ ÔØ» src/test/rawMaterialController.test.js:820:23
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[1/2]ÔÄ»
+
+ FAIL  src/test/recipeInventory.test.js > recipe-based inventory management > grosses up recipe ingredient quantities 
+by expected preparation loss for raw materials
+AssertionError: expected 7.8494623699999995 to be 7.84946237 // Object.is equality
+
+- Expected
++ Received
+
+- 7.84946237
++ 7.8494623699999995
+
+ ÔØ» src/test/recipeInventory.test.js:1427:67
+    1425|       wastageQuantity: 0
+    1426|     });
+    1427|     expect((await InventoryItem.findById(rice._id)).currentStock).toBe(
+       |                                                                   ^
+    1428|       Math.round((10 - requiredWithLoss + Number.EPSILON) * 100000000)ÔÇª
+    1429|     );
+
+ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»ÔÄ»[2/2]ÔÄ»
+
+
+ Test Files  2 failed (2)
+      Tests  2 failed | 15 passed (17)
+   Start at  12:34:51
+   Duration  11.27s (transform 290ms, setup 0ms, collect 1.32s, tests 9.69s, environment 0ms, prepare 90ms)
+

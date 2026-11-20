@@ -7,7 +7,8 @@ import { generateReference } from '../utils/reference.js';
 import { logAudit } from '../services/auditService.js';
 import { notifyHotelOperations, notifyRoles } from '../services/notificationService.js';
 import {
-  evaluateAutomaticReorder, getRawMaterialUnitConfigurationStatus, postStockMovement,
+  cancelStockReceipt, correctStockReceipt, evaluateAutomaticReorder,
+  getRawMaterialUnitConfigurationStatus, postStockMovement,
   resolveRawMaterialPurchaseUnit, runInventoryTransaction
 } from '../services/inventoryService.js';
 import { resolveStorageLocation } from '../services/storageLocationService.js';
@@ -1298,6 +1299,32 @@ export const recordStockMovement = async (req, res, next) => {
           deductionMovement = deductionResult.movement;
         }
       }
+      const purchaseQty = Number(req.body.packageQuantity ?? quantity);
+      const purchaseUnitPrice = req.body.purchaseUnitPrice !== undefined
+        ? Number(req.body.purchaseUnitPrice)
+        : undefined;
+      const purchaseSubtotal = Number.isFinite(purchaseUnitPrice) && Number.isFinite(purchaseQty)
+        ? Math.round((purchaseQty * purchaseUnitPrice + Number.EPSILON) * 100) / 100
+        : 0;
+      const discountPercent = Number(req.body.discountPercent || 0);
+      const taxPercent = Number(req.body.taxPercent || 0);
+      let purchaseDiscountAmount = Number(
+        req.body.purchaseDiscountAmount ?? req.body.discountAmount ?? NaN
+      );
+      if (!Number.isFinite(purchaseDiscountAmount)) {
+        purchaseDiscountAmount = discountPercent > 0
+          ? Math.round((purchaseSubtotal * (discountPercent / 100) + Number.EPSILON) * 100) / 100
+          : 0;
+      }
+      let purchaseTaxAmount = Number(
+        req.body.purchaseTaxAmount ?? req.body.taxAmount ?? NaN
+      );
+      if (!Number.isFinite(purchaseTaxAmount)) {
+        const taxable = Math.max(0, purchaseSubtotal - purchaseDiscountAmount);
+        purchaseTaxAmount = taxPercent > 0
+          ? Math.round((taxable * (taxPercent / 100) + Number.EPSILON) * 100) / 100
+          : 0;
+      }
       const receiptResult = await postStockMovement({
         hotelId: req.hotelId,
         propertyId: req.propertyId,
@@ -1307,7 +1334,10 @@ export const recordStockMovement = async (req, res, next) => {
         unit: req.body.unit,
         unitCost: req.body.unitCost,
         purchaseUnitPrice: req.body.purchaseUnitPrice,
-        purchaseTaxAmount: req.body.purchaseTaxAmount,
+        purchaseTaxAmount,
+        purchaseDiscountAmount,
+        taxPercent,
+        discountPercent,
         vendorId,
         autoGenerateBatchNumber,
         purchasePackageId: req.body.purchasePackageId || null,
@@ -1321,16 +1351,24 @@ export const recordStockMovement = async (req, res, next) => {
         batchNumber: req.body.batchNumber || '',
         expiryDate: req.body.expiryDate ? new Date(req.body.expiryDate) : null,
         batchDetails: req.body.purchaseUnitPrice !== undefined ? {
-          purchaseQuantity: Number(req.body.packageQuantity ?? quantity),
+          purchaseQuantity: purchaseQty,
           purchaseUnit: req.body.unit || receiptMaterial?.supportedUnits
             ?.find((entry) => String(entry._id) === String(req.body.purchasePackageId))
             ?.unitSymbolSnapshot || '',
           purchaseUnitCost: Number(req.body.purchaseUnitPrice),
-          purchaseAmount: Number(req.body.packageQuantity ?? quantity)
-            * Number(req.body.purchaseUnitPrice),
-          purchaseTaxAmount: Number(req.body.purchaseTaxAmount || 0),
-          purchaseTaxInclusiveUnitCost: Number(req.body.purchaseUnitPrice)
-            + (Number(req.body.purchaseTaxAmount || 0) / Number(req.body.packageQuantity ?? quantity))
+          purchaseAmount: purchaseSubtotal,
+          purchaseDiscountAmount,
+          discountPercent,
+          purchaseTaxAmount,
+          taxPercent,
+          purchaseTaxInclusiveUnitCost: purchaseQty > 0
+            ? Number(req.body.purchaseUnitPrice)
+              - (purchaseDiscountAmount / purchaseQty)
+              + (purchaseTaxAmount / purchaseQty)
+            : Number(req.body.purchaseUnitPrice),
+          purchaseGrandTotal: Math.round(
+            (purchaseSubtotal - purchaseDiscountAmount + purchaseTaxAmount + Number.EPSILON) * 100
+          ) / 100
         } : {},
         recordedBy: req.user._id,
         idempotencyKey: movementIdempotencyKey,
@@ -1448,6 +1486,79 @@ export const recordStockMovement = async (req, res, next) => {
   }
 };
 
+export const correctPurchaseMovement = async (req, res, next) => {
+  try {
+    if (!isAdministrator(req.user)) {
+      return res.status(403).json({ success: false, message: 'Only hotel administrators can correct purchases.' });
+    }
+    const result = await runInventoryTransaction((session) => correctStockReceipt({
+      hotelId: req.hotelId,
+      propertyId: req.propertyId,
+      movementId: req.params.id,
+      recordedBy: req.user._id,
+      corrections: req.body || {},
+      notes: req.body?.notes || '',
+      idempotencyKey: req.body?.idempotencyKey || req.get('Idempotency-Key'),
+      session
+    }));
+    await logAudit({
+      hotelId: req.hotelId,
+      action: 'CORRECT_PURCHASE_MOVEMENT',
+      entity: 'StockMovement',
+      entityId: result.movement?._id || req.params.id,
+      details: {
+        originalMovementId: String(req.params.id),
+        reversalMovementId: result.reversal?._id ? String(result.reversal._id) : null,
+        duplicate: Boolean(result.duplicate)
+      },
+      req
+    });
+    res.status(result.duplicate ? 200 : 200).json({
+      success: true,
+      message: result.duplicate ? 'Purchase correction was already recorded.' : 'Purchase corrected; original receipt reversed and reposted.',
+      data: result
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const cancelPurchaseMovement = async (req, res, next) => {
+  try {
+    if (!isAdministrator(req.user)) {
+      return res.status(403).json({ success: false, message: 'Only hotel administrators can cancel purchases.' });
+    }
+    const result = await runInventoryTransaction((session) => cancelStockReceipt({
+      hotelId: req.hotelId,
+      propertyId: req.propertyId,
+      movementId: req.params.id,
+      recordedBy: req.user._id,
+      notes: req.body?.notes || '',
+      idempotencyKey: req.body?.idempotencyKey || req.get('Idempotency-Key'),
+      session
+    }));
+    if (!result.duplicate) {
+      await logAudit({
+        hotelId: req.hotelId,
+        action: 'CANCEL_PURCHASE_MOVEMENT',
+        entity: 'StockMovement',
+        entityId: result.movement?._id || req.params.id,
+        details: {
+          reversalMovementId: result.reversal?._id ? String(result.reversal._id) : null
+        },
+        req
+      });
+    }
+    res.json({
+      success: true,
+      message: result.duplicate ? 'Purchase was already cancelled.' : 'Purchase cancelled and stock reversed.',
+      data: result
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 export const getVendors = async (req, res, next) => {
   try {
     const vendors = await Vendor.find({ hotelId: req.hotelId }).populate('suppliedItems', 'name code unit').sort({ name: 1 });
@@ -1469,6 +1580,14 @@ export const createVendor = async (req, res, next) => {
     if (!Array.isArray(suppliedItems)) {
       return res.status(400).json({ success: false, message: 'Supplied items must be a list.' });
     }
+    const vendorName = name.trim();
+    const duplicateName = await Vendor.findOne({
+      hotelId: req.hotelId,
+      name: new RegExp(`^${vendorName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
+    }).select('_id').lean();
+    if (duplicateName) {
+      return res.status(409).json({ success: false, message: 'A supplier with this name is already registered for this hotel.' });
+    }
     if (taxNumber && await Vendor.exists({ hotelId: req.hotelId, taxNumber: String(taxNumber).trim() })) {
       return res.status(409).json({ success: false, message: 'A supplier with this GSTIN is already registered.' });
     }
@@ -1481,7 +1600,7 @@ export const createVendor = async (req, res, next) => {
       }
     }
     const vendor = await Vendor.create({
-      name: name.trim(),
+      name: vendorName,
       contactPerson,
       email,
       phone,
@@ -1518,6 +1637,21 @@ export const updateVendor = async (req, res, next) => {
     );
     if (req.body.gstNumber !== undefined && updates.taxNumber === undefined) {
       updates.taxNumber = req.body.gstNumber;
+    }
+    if (updates.name !== undefined) {
+      const vendorName = String(updates.name).trim();
+      if (!vendorName) {
+        return res.status(400).json({ success: false, message: 'Vendor name cannot be empty.' });
+      }
+      updates.name = vendorName;
+      const duplicateName = await Vendor.findOne({
+        hotelId: req.hotelId,
+        _id: { $ne: req.params.id },
+        name: new RegExp(`^${vendorName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
+      }).select('_id').lean();
+      if (duplicateName) {
+        return res.status(409).json({ success: false, message: 'A supplier with this name is already registered for this hotel.' });
+      }
     }
     if (updates.taxNumber) {
       const duplicate = await Vendor.exists({

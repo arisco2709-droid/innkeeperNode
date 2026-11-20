@@ -1,3 +1,4 @@
+import path from 'path';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -44,6 +45,9 @@ if (process.env.NODE_ENV !== 'test') {
 
 // General API rate limiter (1000 req / 15 min per IP)
 app.use('/api/', apiLimiter);
+
+// Uploaded receipts and other files
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Health Check
 app.get('/api/v1/health', (req, res) => {
