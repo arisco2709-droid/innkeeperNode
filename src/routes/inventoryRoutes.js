@@ -38,6 +38,13 @@ import {
   updateRawMaterialSubcategory
 } from '../controllers/rawMaterialController.js';
 import {
+  downloadRawMaterialBulkFailedFile,
+  downloadRawMaterialBulkTemplate,
+  getRawMaterialBulkUploadLog,
+  getRawMaterialBulkUploadLogs,
+  uploadRawMaterialsBulk
+} from '../controllers/rawMaterialBulkUploadController.js';
+import {
   approvePurchaseOrder,
   assignMinibarStock,
   cancelStockTransfer,
@@ -103,6 +110,7 @@ import {
 } from '../controllers/procurementController.js';
 import { SupplierPayment } from '../models/SupplierPayment.js';
 import { authenticate, requireTenant, authorize } from '../middlewares/auth.js';
+import { uploadRawMaterialBulk } from '../middlewares/upload.js';
 import { validatePhoneFields } from '../middlewares/phoneValidator.js';
 
 const router = Router();
@@ -119,6 +127,18 @@ router.get('/raw-materials/subcategories', getRawMaterialSubcategories);
 router.post('/raw-materials/subcategories', authorize(), createRawMaterialSubcategory);
 router.patch('/raw-materials/subcategories/:id', authorize(), updateRawMaterialSubcategory);
 router.get('/raw-materials', getRawMaterials);
+router.get('/raw-materials/bulk-upload/template', downloadRawMaterialBulkTemplate);
+router.get('/raw-materials/bulk-upload/logs', getRawMaterialBulkUploadLogs);
+router.get('/raw-materials/bulk-upload/logs/:id', getRawMaterialBulkUploadLog);
+router.get('/raw-materials/bulk-upload/logs/:id/failed-file', downloadRawMaterialBulkFailedFile);
+router.post('/raw-materials/bulk-upload', authorize(), (req, res, next) => {
+  uploadRawMaterialBulk.single('file')(req, res, (error) => {
+    if (!error) return uploadRawMaterialsBulk(req, res, next);
+    error.statusCode = 400;
+    if (error.code === 'LIMIT_FILE_SIZE') error.message = 'File size exceeds the 10MB limit.';
+    return next(error);
+  });
+});
 router.post('/raw-materials', authorize(), createRawMaterial);
 router.patch('/raw-materials/:id', authorize(), updateRawMaterial);
 router.delete('/raw-materials/:id', authorize(), deleteRawMaterial);

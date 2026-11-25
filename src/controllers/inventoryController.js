@@ -9,7 +9,8 @@ import { notifyHotelOperations, notifyRoles } from '../services/notificationServ
 import {
   cancelStockReceipt, correctStockReceipt, evaluateAutomaticReorder,
   getRawMaterialUnitConfigurationStatus, postStockMovement,
-  resolveRawMaterialPurchaseUnit, runInventoryTransaction
+  resolveRawMaterialPurchaseUnit, runInventoryTransaction,
+  updateStockReceiptInPlace
 } from '../services/inventoryService.js';
 import { resolveStorageLocation } from '../services/storageLocationService.js';
 import {
@@ -265,7 +266,31 @@ export const getInventoryBatches = async (req, res, next) => {
       propertyId: req.propertyId,
       itemId: item._id,
       ...(req.query.location ? { location: String(req.query.location).trim() } : {})
-    }).select('movementType batchAllocations orderId metadata quantity location destinationLocation transactionDate createdAt').sort({ transactionDate: 1, createdAt: 1, _id: 1 }).lean();
+    }).select('movementType batchAllocations orderId metadata quantity location destinationLocation transactionDate createdAt batchNumber').sort({ transactionDate: 1, createdAt: 1, _id: 1 }).lean();
+    const isReceiptCancelled = (movement) => (
+      movement?.metadata?.status === 'cancelled'
+      || Boolean(movement?.metadata?.reversedByMovementId)
+      || Boolean(movement?.metadata?.cancelledAt)
+    );
+    const receiptMovements = movements.filter((movement) => (
+      movement.movementType === 'receipt' && !isReceiptCancelled(movement)
+    ));
+    const receiptMovementIdByBatch = new Map();
+    for (const movement of receiptMovements) {
+      if (movement.batchNumber) {
+        const numberedBatch = batches.find((batch) => batch.batchNumber === movement.batchNumber);
+        if (numberedBatch && !receiptMovementIdByBatch.has(String(numberedBatch._id))) {
+          receiptMovementIdByBatch.set(String(numberedBatch._id), String(movement._id));
+        }
+      }
+      for (const allocation of movement.batchAllocations || []) {
+        if (!allocation.batchId) continue;
+        const batchId = String(allocation.batchId);
+        if (!receiptMovementIdByBatch.has(batchId)) {
+          receiptMovementIdByBatch.set(batchId, String(movement._id));
+        }
+      }
+    }
     const balances = await InventoryBalance.find({
       hotelId: req.hotelId,
       propertyId: req.propertyId,
@@ -431,6 +456,7 @@ export const getInventoryBatches = async (req, res, next) => {
           : purchaseDataValid ? 'valid' : 'incomplete_purchase_data';
         return {
           ...batch,
+          receiptMovementId: receiptMovementIdByBatch.get(String(batch._id)) || null,
           dataIntegrityStatus,
           dataIntegrityMessage: !unitConfiguration.valid
             ? unitConfiguration.message
@@ -1491,31 +1517,49 @@ export const correctPurchaseMovement = async (req, res, next) => {
     if (!isAdministrator(req.user)) {
       return res.status(403).json({ success: false, message: 'Only hotel administrators can correct purchases.' });
     }
-    const result = await runInventoryTransaction((session) => correctStockReceipt({
-      hotelId: req.hotelId,
-      propertyId: req.propertyId,
-      movementId: req.params.id,
-      recordedBy: req.user._id,
-      corrections: req.body || {},
-      notes: req.body?.notes || '',
-      idempotencyKey: req.body?.idempotencyKey || req.get('Idempotency-Key'),
-      session
-    }));
+    const inPlace = req.body?.inPlace === true || req.body?.mode === 'in_place';
+    const result = await runInventoryTransaction((session) => (
+      inPlace
+        ? updateStockReceiptInPlace({
+          hotelId: req.hotelId,
+          propertyId: req.propertyId,
+          movementId: req.params.id,
+          recordedBy: req.user._id,
+          corrections: req.body || {},
+          notes: req.body?.notes || '',
+          idempotencyKey: req.body?.idempotencyKey || req.get('Idempotency-Key'),
+          session
+        })
+        : correctStockReceipt({
+          hotelId: req.hotelId,
+          propertyId: req.propertyId,
+          movementId: req.params.id,
+          recordedBy: req.user._id,
+          corrections: req.body || {},
+          notes: req.body?.notes || '',
+          idempotencyKey: req.body?.idempotencyKey || req.get('Idempotency-Key'),
+          session
+        })
+    ));
     await logAudit({
       hotelId: req.hotelId,
-      action: 'CORRECT_PURCHASE_MOVEMENT',
+      action: inPlace ? 'UPDATE_PURCHASE_MOVEMENT_IN_PLACE' : 'CORRECT_PURCHASE_MOVEMENT',
       entity: 'StockMovement',
       entityId: result.movement?._id || req.params.id,
       details: {
         originalMovementId: String(req.params.id),
         reversalMovementId: result.reversal?._id ? String(result.reversal._id) : null,
+        inPlace,
+        batchId: result.batch?._id ? String(result.batch._id) : null,
         duplicate: Boolean(result.duplicate)
       },
       req
     });
-    res.status(result.duplicate ? 200 : 200).json({
+    res.status(200).json({
       success: true,
-      message: result.duplicate ? 'Purchase correction was already recorded.' : 'Purchase corrected; original receipt reversed and reposted.',
+      message: result.duplicate
+        ? (inPlace ? 'Purchase receipt update was already recorded.' : 'Purchase correction was already recorded.')
+        : (inPlace ? 'Purchase receipt updated.' : 'Purchase corrected; original receipt reversed and reposted.'),
       data: result
     });
   } catch (err) {

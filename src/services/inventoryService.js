@@ -2290,6 +2290,410 @@ export const correctStockReceipt = async ({
   };
 };
 
+export const updateStockReceiptInPlace = async ({
+  hotelId,
+  propertyId,
+  movementId,
+  recordedBy,
+  corrections = {},
+  notes = '',
+  idempotencyKey,
+  session
+}) => {
+  const movement = await StockMovement.findOne({ _id: movementId, hotelId, propertyId }).session(session);
+  if (!movement) throw Object.assign(new Error('Stock movement not found.'), { statusCode: 404 });
+  if (movement.movementType !== 'receipt') {
+    throw Object.assign(new Error('Only purchase receipts can be edited in place.'), { statusCode: 400 });
+  }
+  if (isMovementCancelled(movement)) {
+    throw Object.assign(new Error('This purchase was already cancelled and cannot be edited.'), { statusCode: 409 });
+  }
+  if (idempotencyKey && movement.metadata?.lastInPlaceIdempotencyKey === idempotencyKey) {
+    const batch = await findReceiptBatch(movement, session);
+    const item = await InventoryItem.findOne({ _id: movement.itemId, hotelId, propertyId }).session(session);
+    return { movement, batch, item, duplicate: true };
+  }
+
+  const receiptBatch = await findReceiptBatch(movement, session);
+  if (!receiptBatch) {
+    throw Object.assign(new Error('Receipt batch not found for this purchase.'), { statusCode: 404 });
+  }
+  const oldBaseQty = roundQuantity(Number(movement.quantity));
+  const batchQuantity = roundQuantity(Number(receiptBatch.quantity));
+  const batchRemaining = roundQuantity(Number(receiptBatch.remainingQuantity));
+  if (Math.abs(batchRemaining - batchQuantity) > 1e-8
+    || Math.abs(batchQuantity - oldBaseQty) > 1e-8) {
+    throw Object.assign(new Error(
+      'This receipt cannot be edited because stock has already been used.'
+    ), { statusCode: 409 });
+  }
+
+  const item = await InventoryItem.findOne({
+    _id: movement.itemId, hotelId, propertyId, isActive: true
+  }).session(session);
+  if (!item) throw Object.assign(new Error('Active inventory item not found.'), { statusCode: 404 });
+  if (item.inventoryType === 'raw_material') {
+    await requireRawMaterialUnitConfiguration({ item, hotelId, session });
+  }
+
+  const enteredQuantity = Number(
+    corrections.quantity ?? movement.enteredQuantity ?? movement.quantity
+  );
+  const unit = corrections.unit ?? movement.enteredUnit ?? movement.baseUnit;
+  const unitChanged = normalizeInventoryUnit(unit)
+    !== normalizeInventoryUnit(movement.enteredUnit || movement.baseUnit || '');
+  const unitId = corrections.unitId
+    ?? (unitChanged ? undefined : movement.enteredUnitId);
+  const conversionFactor = corrections.conversionFactor !== undefined
+    ? corrections.conversionFactor
+    : (unitChanged ? undefined : movement.conversionFactor);
+  const purchaseUnitPrice = corrections.purchaseUnitPrice
+    ?? corrections.unitCost
+    ?? movement.purchaseUnitPrice
+    ?? movement.metadata?.purchaseFinancials?.unitCost;
+  const purchaseTaxAmountOverride = corrections.purchaseTaxAmount
+    ?? corrections.taxAmount
+    ?? movement.metadata?.purchaseFinancials?.taxAmount
+    ?? 0;
+  const purchaseDiscountAmountOverride = corrections.purchaseDiscountAmount
+    ?? corrections.discountAmount
+    ?? movement.metadata?.purchaseFinancials?.discountAmount
+    ?? 0;
+  const taxPercent = corrections.taxPercent ?? movement.metadata?.purchaseFinancials?.taxPercent ?? 0;
+  const discountPercent = corrections.discountPercent
+    ?? movement.metadata?.purchaseFinancials?.discountPercent
+    ?? 0;
+  const purchasePackageId = corrections.purchasePackageId ?? movement.purchasePackageId;
+  const purchasePackageName = corrections.purchasePackageName ?? movement.purchasePackageName ?? '';
+  const packageQuantity = corrections.packageQuantity
+    ?? (purchasePackageId ? movement.enteredQuantity : null);
+  const looseQuantity = corrections.looseQuantity ?? movement.looseQuantity ?? 0;
+  const vendorId = corrections.vendorId !== undefined ? corrections.vendorId : movement.vendorId;
+  const department = corrections.department ?? movement.department ?? '';
+  const expiryDate = corrections.expiryDate !== undefined
+    ? (corrections.expiryDate ? new Date(corrections.expiryDate) : null)
+    : movement.expiryDate;
+  const movementNotes = notes || corrections.notes || movement.notes || '';
+
+  let location = corrections.location ?? movement.location;
+  let locationId = corrections.locationId ?? movement.locationId;
+  const storageLocation = await resolveStorageLocation({
+    hotelId,
+    locationId,
+    locationName: location,
+    session
+  });
+  location = storageLocation.locationName;
+  locationId = storageLocation._id;
+
+  let numericQuantity = Number(enteredQuantity);
+  const hasPackageQuantity = packageQuantity !== null && packageQuantity !== undefined;
+  if ((purchasePackageId && !hasPackageQuantity && !corrections.purchasePackageSnapshot)
+    || (hasPackageQuantity && !purchasePackageId)) {
+    throw Object.assign(new Error('A configured package and package quantity must be provided together.'), { statusCode: 400 });
+  }
+  const purchasePackage = purchasePackageId && hasPackageQuantity
+    ? item.supportedUnits.id(String(purchasePackageId))
+    : null;
+  let resolvedEnteredQuantity = numericQuantity;
+  let enteredUnit = purchasePackageName || unit || item.baseUnit || item.unit;
+  let conversionFactorOverride = conversionFactor;
+  let recordedLooseQuantity = 0;
+  let configuredUnitId = unitId || unitIdForSymbol(item, enteredUnit);
+  let resolvedUnit = unit;
+  if (purchasePackageId && hasPackageQuantity) {
+    const packageCount = Number(packageQuantity);
+    recordedLooseQuantity = Number(looseQuantity);
+    if (item.inventoryType !== 'raw_material'
+      || !purchasePackage || purchasePackage.isActive === false
+      || !(Number(purchasePackage.packageSize) > 0)
+      || !purchasePackage.packageMeasurementUnitId
+      || !Number.isFinite(packageCount) || packageCount < 0
+      || !Number.isFinite(recordedLooseQuantity) || recordedLooseQuantity < 0
+      || (packageCount === 0 && recordedLooseQuantity === 0)
+      || !(Number(purchasePackage.conversionFactorToBase) > 0)) {
+      throw Object.assign(new Error('Choose a configured package and enter a positive package or loose quantity.'), { statusCode: 400 });
+    }
+    resolvedEnteredQuantity = packageCount;
+    enteredUnit = purchasePackage.packageName || purchasePackage.unitNameSnapshot;
+    conversionFactorOverride = Number(purchasePackage.conversionFactorToBase);
+    numericQuantity = packageCount * conversionFactorOverride + recordedLooseQuantity;
+    if (!Number.isFinite(numericQuantity) || numericQuantity <= 0) {
+      throw Object.assign(new Error('Converted stock quantity must be greater than zero.'), { statusCode: 400 });
+    }
+    configuredUnitId = purchasePackage.unitId;
+    resolvedUnit = item.baseUnit || item.unit;
+    conversionFactorOverride = 1;
+  }
+  if (!Number.isFinite(numericQuantity) || numericQuantity <= 0) {
+    throw Object.assign(new Error('Quantity must be a positive number.'), { statusCode: 400 });
+  }
+
+  let enteredUnitRecord;
+  if (configuredUnitId) {
+    enteredUnitRecord = await Unit.findOne({ _id: configuredUnitId, hotelId }).session(session);
+  } else {
+    enteredUnitRecord = await Unit.findOne({
+      hotelId,
+      symbolKey: String(enteredUnit).trim().toLocaleLowerCase(),
+      ...(conversionFactor === undefined ? { isActive: true } : {})
+    }).session(session);
+  }
+  if (item.baseUnitId) {
+    const baseUnitRecord = await Unit.findOne({ _id: item.baseUnitId, hotelId }).session(session);
+    if (!enteredUnitRecord || !baseUnitRecord) {
+      throw Object.assign(new Error('Stock movement unit is not registered for this hotel.'), { statusCode: 400 });
+    }
+    if (!configuredUnitId && enteredUnitRecord.category !== baseUnitRecord.category) {
+      throw Object.assign(new Error('Stock movement units must be compatible with the inventory item base unit.'), { statusCode: 400 });
+    }
+  }
+
+  const converted = convertQuantityToBase(
+    item,
+    numericQuantity,
+    resolvedUnit || enteredUnit,
+    conversionFactorOverride
+  );
+  let purchaseConversionFactor = converted.factor;
+  const purchasePrice = purchaseUnitPrice === null || purchaseUnitPrice === undefined
+    ? null
+    : Number(purchaseUnitPrice);
+  if (purchasePrice !== null && (!Number.isFinite(purchasePrice) || purchasePrice < 0)) {
+    throw Object.assign(new Error('Purchase price must be a non-negative number.'), { statusCode: 400 });
+  }
+  if (item.inventoryType === 'raw_material') {
+    if (purchasePrice === null) {
+      throw Object.assign(new Error('Purchase price is required before adding raw material stock.'), { statusCode: 400 });
+    }
+    if (!Number.isFinite(resolvedEnteredQuantity) || resolvedEnteredQuantity <= 0 || !String(enteredUnit || '').trim()) {
+      throw Object.assign(new Error('Enter a positive purchased quantity and configured purchase unit.'), { statusCode: 400 });
+    }
+    const purchaseConfiguration = await resolveRawMaterialPurchaseUnit({
+      item,
+      hotelId,
+      purchaseUnitId: configuredUnitId,
+      purchaseUnit: resolvedUnit || enteredUnit,
+      purchasePackageId,
+      conversionFactor: conversionFactor ?? (purchasePackage?.conversionFactorToBase || converted.factor),
+      allowConversionSnapshot: Boolean(corrections.purchasePackageSnapshot),
+      session
+    });
+    purchaseConversionFactor = conversionFactor === undefined || conversionFactor === null
+      ? purchaseConfiguration.conversionFactor
+      : Number(conversionFactor);
+    enteredUnit = purchaseConfiguration.entry.packageName
+      || purchaseConfiguration.entry.unitSymbolSnapshot
+      || purchaseConfiguration.unit.symbol;
+  }
+
+  const purchaseQuantityForFinancials = purchasePackage && hasPackageQuantity
+    ? Number(packageQuantity) + (Number(looseQuantity) > 0 && Number(purchasePackage.conversionFactorToBase) > 0
+      ? Number(looseQuantity) / Number(purchasePackage.conversionFactorToBase)
+      : 0)
+    : resolvedEnteredQuantity;
+  const purchaseSubtotal = purchasePrice !== null && Number.isFinite(purchaseQuantityForFinancials)
+    ? roundMoney(purchaseQuantityForFinancials * purchasePrice)
+    : 0;
+  const resolvedDiscountPercent = Number(discountPercent ?? 0);
+  let purchaseDiscountAmount = Number(purchaseDiscountAmountOverride);
+  if (!Number.isFinite(purchaseDiscountAmount)) {
+    purchaseDiscountAmount = Number.isFinite(resolvedDiscountPercent) && resolvedDiscountPercent > 0
+      ? roundMoney(purchaseSubtotal * (resolvedDiscountPercent / 100))
+      : 0;
+  }
+  if (!Number.isFinite(purchaseDiscountAmount) || purchaseDiscountAmount < 0
+    || (purchaseDiscountAmount > 0 && purchasePrice === null)) {
+    throw Object.assign(new Error('Purchase discount must be a non-negative amount on a stock receipt with a purchase price.'), { statusCode: 400 });
+  }
+  if (purchaseDiscountAmount > purchaseSubtotal + 1e-8) {
+    throw Object.assign(new Error('Purchase discount cannot exceed the purchase subtotal.'), { statusCode: 400 });
+  }
+  const taxableSubtotal = roundMoney(Math.max(0, purchaseSubtotal - purchaseDiscountAmount));
+  const resolvedTaxPercent = Number(taxPercent ?? 0);
+  let purchaseTaxAmount = Number(purchaseTaxAmountOverride);
+  if (!Number.isFinite(purchaseTaxAmount)) {
+    purchaseTaxAmount = Number.isFinite(resolvedTaxPercent) && resolvedTaxPercent > 0
+      ? roundMoney(taxableSubtotal * (resolvedTaxPercent / 100))
+      : 0;
+  }
+  if (!Number.isFinite(purchaseTaxAmount) || purchaseTaxAmount < 0
+    || (purchaseTaxAmount > 0 && purchasePrice === null)) {
+    throw Object.assign(new Error('Purchase tax must be a non-negative amount on a stock receipt with a purchase price.'), { statusCode: 400 });
+  }
+  const purchaseGrandTotal = roundMoney(taxableSubtotal + purchaseTaxAmount);
+  const enteredUnitId = enteredUnitRecord?._id || configuredUnitId || null;
+  const newBaseQty = roundQuantity(converted.quantity);
+  const receiptUnitCost = purchasePrice !== null
+    ? (purchasePrice / converted.factor)
+      - (newBaseQty > 0 ? purchaseDiscountAmount / newBaseQty : 0)
+      + (newBaseQty > 0 ? purchaseTaxAmount / newBaseQty : 0)
+    : Number(movement.unitCost) || item.unitCost;
+  const purchaseQuantityForBatch = purchasePackage && hasPackageQuantity
+    ? roundQuantity(resolvedEnteredQuantity + recordedLooseQuantity / purchaseConversionFactor)
+    : resolvedEnteredQuantity;
+  const purchaseFinancials = purchasePrice !== null
+    ? {
+      quantity: purchaseQuantityForBatch,
+      unitCost: purchasePrice,
+      subtotal: purchaseSubtotal,
+      discountAmount: roundMoney(purchaseDiscountAmount),
+      discountPercent: Number.isFinite(resolvedDiscountPercent) ? resolvedDiscountPercent : 0,
+      taxAmount: roundMoney(purchaseTaxAmount),
+      taxPercent: Number.isFinite(resolvedTaxPercent) ? resolvedTaxPercent : 0,
+      grandTotal: purchaseGrandTotal
+    }
+    : null;
+  if (item.trackExpiry && !expiryDate) {
+    throw Object.assign(new Error(`An expiry date is required for ${item.name}.`), { statusCode: 400 });
+  }
+
+  const delta = roundQuantity(newBaseQty - oldBaseQty);
+  const previousStock = item.currentStock;
+  const nextStock = roundQuantity(previousStock + delta);
+  if (nextStock < -1e-8) {
+    throw Object.assign(new Error(`Insufficient stock. Current stock is ${previousStock} ${item.unit}.`), { statusCode: 409 });
+  }
+
+  if (delta !== 0) {
+    const itemUpdate = await InventoryItem.updateOne({
+      _id: item._id,
+      hotelId,
+      propertyId,
+      currentStock: delta < 0 ? { $gte: Math.abs(delta) } : previousStock
+    }, { $inc: { currentStock: delta } }, { session });
+    if (itemUpdate.modifiedCount !== 1) {
+      throw Object.assign(new Error('Stock changed concurrently. Refresh and retry.'), { statusCode: 409 });
+    }
+  }
+
+  const oldLocation = movement.location;
+  const oldLocationId = movement.locationId;
+  const locationChanged = String(oldLocationId || '') !== String(locationId || '')
+    || String(oldLocation || '').trim().toLocaleLowerCase() !== String(location || '').trim().toLocaleLowerCase();
+  let balanceMovement;
+  if (locationChanged) {
+    await updateBalance({
+      hotelId,
+      propertyId,
+      item,
+      location: oldLocation,
+      locationId: oldLocationId,
+      delta: -oldBaseQty,
+      session
+    });
+    balanceMovement = await updateBalance({
+      hotelId,
+      propertyId,
+      item,
+      location,
+      locationId,
+      delta: newBaseQty,
+      session
+    });
+  } else {
+    balanceMovement = await updateBalance({
+      hotelId,
+      propertyId,
+      item,
+      location,
+      locationId,
+      delta,
+      session
+    });
+  }
+
+  const movementTotalValue = purchaseFinancials
+    ? purchaseGrandTotal
+    : round(Math.abs(newBaseQty) * receiptUnitCost);
+  const movementUnitCost = newBaseQty > 0
+    ? round(movementTotalValue / newBaseQty)
+    : receiptUnitCost;
+
+  const batchUpdate = await InventoryBatch.findOneAndUpdate({
+    _id: receiptBatch._id,
+    quantity: batchQuantity,
+    remainingQuantity: batchRemaining
+  }, {
+    $set: {
+      quantity: newBaseQty,
+      remainingQuantity: newBaseQty,
+      unitCost: receiptUnitCost,
+      location,
+      locationId,
+      expiryDate,
+      ...(vendorId !== undefined ? { vendorId: vendorId || null } : {}),
+      ...(purchasePrice !== null ? {
+        purchaseQuantity: purchaseQuantityForBatch,
+        purchaseUnit: enteredUnit,
+        purchaseUnitCost: purchasePrice,
+        purchaseAmount: roundMoney(purchaseQuantityForBatch * purchasePrice),
+        purchaseConversionFactor,
+        purchaseDiscountAmount: roundMoney(purchaseDiscountAmount),
+        purchaseTaxAmount: round(purchaseTaxAmount),
+        purchaseTaxInclusiveUnitCost: receiptUnitCost * converted.factor,
+        purchaseGrandTotal
+      } : {})
+    }
+  }, { new: true, session });
+  if (!batchUpdate) {
+    throw Object.assign(new Error('This receipt cannot be edited because stock has already been used.'), { statusCode: 409 });
+  }
+
+  movement.quantity = newBaseQty;
+  movement.previousStock = previousStock;
+  movement.newStock = nextStock;
+  movement.unitCost = movementUnitCost;
+  movement.totalValue = movementTotalValue;
+  movement.notes = movementNotes;
+  movement.location = location;
+  movement.locationId = locationId;
+  movement.department = department;
+  movement.vendorId = vendorId || null;
+  movement.purchaseUnitPrice = purchasePrice;
+  movement.expiryDate = expiryDate;
+  movement.enteredQuantity = resolvedEnteredQuantity;
+  movement.enteredUnit = purchasePackage || purchasePackageName ? enteredUnit : converted.unit;
+  movement.enteredUnitId = enteredUnitId;
+  movement.purchasePackageId = purchasePackage?._id || purchasePackageId || null;
+  movement.purchasePackageName = purchasePackage?.packageName || purchasePackageName || '';
+  movement.looseQuantity = recordedLooseQuantity;
+  movement.conversionFactor = purchasePackage
+    ? Number(purchasePackage.conversionFactorToBase)
+    : converted.factor;
+  movement.baseUnit = item.baseUnit || item.unit;
+  movement.baseUnitId = item.baseUnitId || null;
+  movement.metadata = {
+    ...(movement.metadata || {}),
+    ...(purchaseFinancials ? { purchaseFinancials } : {}),
+    locationPreviousStock: balanceMovement.previous,
+    locationNewStock: balanceMovement.current,
+    lastCorrectedAt: new Date(),
+    correctedInPlace: true,
+    correctedBy: recordedBy,
+    ...(idempotencyKey ? { lastInPlaceIdempotencyKey: idempotencyKey } : {})
+  };
+  movement.markModified('metadata');
+  await movement.save({ session });
+
+  if (item.inventoryType === 'raw_material') {
+    await evaluateAutomaticReorder({
+      hotelId,
+      propertyId,
+      itemId: item._id,
+      recordedBy,
+      session
+    });
+  }
+
+  return {
+    movement,
+    batch: batchUpdate,
+    item: { ...item.toObject(), currentStock: nextStock },
+    duplicate: false
+  };
+};
+
 export const cancelTransfer = async ({
   hotelId,
   propertyId,

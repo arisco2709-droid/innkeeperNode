@@ -74,7 +74,7 @@ const resolveMaterialUnitFactor = ({ unitId, baseUnit, unitsById, entriesById })
   return resolve(unitId);
 };
 
-const validateUnitConfiguration = async ({ hotelId, baseUnitId, supportedUnits }) => {
+export const validateUnitConfiguration = async ({ hotelId, baseUnitId, supportedUnits }) => {
   if (!asObjectId(baseUnitId)) {
     return { error: 'Choose a valid base unit.' };
   }
@@ -439,7 +439,7 @@ export const getRawMaterials = async (req, res, next) => {
       ];
     }
     const materials = await InventoryItem.find(filter)
-      .populate('categoryId', 'name categoryCode isActive')
+      .populate('categoryId', 'name isActive')
       .populate('subcategoryId', 'name isActive')
       .populate('baseUnitId', 'name symbol category isActive')
       .populate('purchaseUnitId', 'name symbol category isActive')
@@ -455,7 +455,7 @@ export const getRawMaterials = async (req, res, next) => {
   }
 };
 
-const saveRawMaterial = async ({ req, currentItem = null }) => {
+export const saveRawMaterial = async ({ req, currentItem = null }) => {
   const name = normalize(req.body.name ?? currentItem?.name);
   const categoryId = req.body.categoryId ?? currentItem?.categoryId;
   const subcategoryId = req.body.subcategoryId ?? currentItem?.subcategoryId;
