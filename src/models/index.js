@@ -40,6 +40,7 @@ export { InventoryItem } from './InventoryItem.js';
 export { Unit } from './Unit.js';
 export { RawMaterialCategory } from './RawMaterialCategory.js';
 export { RawMaterialSubcategory } from './RawMaterialSubcategory.js';
+export { RawMaterialBulkUploadLog } from './RawMaterialBulkUploadLog.js';
 export { StockMovement } from './StockMovement.js';
 export { Vendor } from './Vendor.js';
 export { PurchaseOrder } from './PurchaseOrder.js';

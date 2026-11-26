@@ -17,6 +17,17 @@ export const uploadExcel = multer({
   }
 });
 
+export const uploadRawMaterialBulk = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const extension = path.extname(file.originalname || '').toLowerCase();
+    const ok = ['.xlsx', '.xls', '.csv'].includes(extension);
+    if (!ok) return cb(new Error('Unsupported file format. Please upload .xlsx, .xls, or .csv.'));
+    cb(null, true);
+  }
+});
+
 const receiptUploadDir = path.join(process.cwd(), 'uploads', 'expenses');
 fs.mkdirSync(receiptUploadDir, { recursive: true });
 

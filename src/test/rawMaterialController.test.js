@@ -696,6 +696,84 @@ describe('raw material master API', () => {
     expect(renamed.statusCode).toBe(409);
   });
 
+  it('updates an unused receipt in place without creating a new batch', async () => {
+    await invoke(createDefaultInventoryUnits, requestFor());
+    const units = await Unit.find({ hotelId, isActive: true });
+    const gram = units.find((unit) => unit.symbol === 'g');
+    const kilogram = units.find((unit) => unit.symbol === 'kg');
+    const category = await invoke(createRawMaterialCategory, requestFor({
+      body: { name: 'In Place Edit Materials' }
+    }));
+    const subcategory = await invoke(createRawMaterialSubcategory, requestFor({
+      body: {
+        categoryId: String(category.body.data._id),
+        name: 'In Place Edit Subcategory'
+      }
+    }));
+    const material = await invoke(createRawMaterial, requestFor({
+      body: {
+        name: 'In place aavul',
+        categoryId: String(category.body.data._id),
+        subcategoryId: String(subcategory.body.data._id),
+        baseUnitId: String(gram._id),
+        supportedUnits: [
+          { unitId: String(gram._id) },
+          { unitId: String(kilogram._id), isDefaultPurchaseUnit: true }
+        ]
+      }
+    }));
+    const receipt = await invoke(recordStockMovement, requestFor({
+      body: {
+        itemId: String(material.body.data._id),
+        movementType: 'receipt',
+        quantity: 5,
+        unit: 'kg',
+        purchaseUnitPrice: 80,
+        batchNumber: 'INPLACE_AAVUL_B1'
+      }
+    }));
+    expect(receipt.statusCode).toBe(201);
+    const originalMovementId = String(receipt.body.data.movement._id);
+    const batchesBefore = await InventoryBatch.find({ itemId: material.body.data._id });
+    expect(batchesBefore).toHaveLength(1);
+    const originalBatchId = String(batchesBefore[0]._id);
+    expect(batchesBefore[0].quantity).toBe(5000);
+    expect(batchesBefore[0].purchaseUnitCost).toBe(80);
+
+    const updated = await invoke(correctPurchaseMovement, requestFor({
+      params: { id: originalMovementId },
+      body: {
+        inPlace: true,
+        quantity: 7,
+        unit: 'kg',
+        purchaseUnitPrice: 90,
+        notes: 'Corrected qty and price'
+      }
+    }));
+    expect(updated.body.success).toBe(true);
+    expect(updated.body.message).toMatch(/updated/i);
+    expect(String(updated.body.data.movement._id)).toBe(originalMovementId);
+    expect(String(updated.body.data.batch._id)).toBe(originalBatchId);
+    expect(updated.body.data.movement.quantity).toBe(7000);
+    expect(updated.body.data.movement.purchaseUnitPrice).toBe(90);
+    expect(updated.body.data.movement.metadata.correctedInPlace).toBe(true);
+    expect(updated.body.data.batch.quantity).toBe(7000);
+    expect(updated.body.data.batch.remainingQuantity).toBe(7000);
+    expect(updated.body.data.batch.purchaseUnitCost).toBe(90);
+    expect((await InventoryItem.findById(material.body.data._id)).currentStock).toBe(7000);
+    expect(await InventoryBatch.countDocuments({ itemId: material.body.data._id })).toBe(1);
+    expect(await StockMovement.countDocuments({
+      itemId: material.body.data._id,
+      movementType: 'receipt'
+    })).toBe(1);
+
+    const batchesResponse = await invoke(getInventoryBatches, requestFor({
+      query: { itemId: String(material.body.data._id) }
+    }));
+    const listed = batchesResponse.body.data.find((batch) => String(batch._id) === originalBatchId);
+    expect(listed.receiptMovementId).toBe(originalMovementId);
+  });
+
   it('applies tax and discount on receipt movements and supports cancel/correct', async () => {
     await invoke(createDefaultInventoryUnits, requestFor());
     const units = await Unit.find({ hotelId, isActive: true });
