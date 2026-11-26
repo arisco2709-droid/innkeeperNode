@@ -1761,13 +1761,23 @@ export const saveRecipe = async (req, res, next) => {
     if (!mongoose.isValidObjectId(menuItemId) || !Array.isArray(ingredients) || !ingredients.length) {
       return res.status(400).json({ success: false, message: 'Menu item and at least one ingredient are required.' });
     }
-    if (!Number.isFinite(Number(preparationTimeMinutes)) || Number(preparationTimeMinutes) < 0
-      || (typeof servingSize !== 'string' && typeof servingSize !== 'number')
-      || !['made_to_order', 'batch_production'].includes(productionMode)
-      || !Number.isFinite(Number(expectedProductionYield)) || Number(expectedProductionYield) <= 0
-      || !Number.isFinite(Number(expectedPreparationLossPercent))
-      || Number(expectedPreparationLossPercent) < 0 || Number(expectedPreparationLossPercent) > 100) {
-      return res.status(400).json({ success: false, message: 'Serving size and preparation time are invalid.' });
+    const servingSizeValue = typeof servingSize === 'number' ? String(servingSize) : servingSize;
+    if (typeof servingSizeValue !== 'string' || !servingSizeValue.trim()) {
+      return res.status(400).json({ success: false, message: 'Enter a serving size.' });
+    }
+    if (!Number.isFinite(Number(preparationTimeMinutes)) || Number(preparationTimeMinutes) < 0) {
+      return res.status(400).json({ success: false, message: 'Enter a preparation time of 0 minutes or more.' });
+    }
+    if (!['made_to_order', 'batch_production'].includes(productionMode)) {
+      return res.status(400).json({ success: false, message: 'Choose a valid production workflow.' });
+    }
+    if (!Number.isFinite(Number(expectedProductionYield)) || Number(expectedProductionYield) <= 0) {
+      return res.status(400).json({ success: false, message: 'Enter an expected recipe yield greater than 0.' });
+    }
+    if (!Number.isFinite(Number(expectedPreparationLossPercent))
+      || Number(expectedPreparationLossPercent) < 0
+      || Number(expectedPreparationLossPercent) > 100) {
+      return res.status(400).json({ success: false, message: 'Enter an expected preparation loss between 0 and 100.' });
     }
     const MenuItem = mongoose.model('MenuItem');
     const menuItemExists = await MenuItem.exists({ _id: menuItemId, hotelId: req.hotelId });

@@ -4,11 +4,30 @@ import {
   InventoryBalance, InventoryBatch, InventoryItem, StockMovement,
   StorageLocation, StorageLocationType
 } from '../models/index.js';
+import { getStorageLocationStock } from '../controllers/storageLocationController.js';
 import { ensureLegacyStorageLocations, resolveStorageLocation } from '../services/storageLocationService.js';
 import { runInventoryTransaction, transferStock } from '../services/inventoryService.js';
 import { setup, teardown } from './setup.js';
 
 const actorId = new mongoose.Types.ObjectId();
+
+const invoke = async (controller, req) => {
+  const res = {
+    statusCode: 200,
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    json(body) {
+      this.body = body;
+      return this;
+    }
+  };
+  await controller(req, res, (error) => {
+    throw error;
+  });
+  return res;
+};
 
 describe('storage location master', () => {
   beforeAll(async () => setup());
@@ -166,6 +185,22 @@ describe('storage location master', () => {
     expect(movements.map((entry) => String(entry.locationId)).sort()).toEqual(
       [String(sourceLocation._id), String(destinationLocation._id)].sort()
     );
+    const stock = await invoke(getStorageLocationStock, {
+      hotelId,
+      propertyId,
+      params: { id: String(sourceLocation._id) }
+    });
+    expect(stock.statusCode).toBe(200);
+    expect(stock.body.data.items).toEqual([
+      expect.objectContaining({
+        itemName: 'Transfer test material',
+        receivedQuantity: 10,
+        currentQuantity: 7,
+        usedQuantity: 3,
+        currentValue: 14
+      })
+    ]);
+
     await expect(runInventoryTransaction((session) => transferStock({
       hotelId,
       propertyId,

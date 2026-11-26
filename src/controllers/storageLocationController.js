@@ -172,3 +172,92 @@ export const updateStorageLocation = async (req, res, next) => {
     next(error);
   }
 };
+
+const roundMoney = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+
+export const getStorageLocationStock = async (req, res, next) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Choose a valid storage location.' });
+    }
+    const location = await StorageLocation.findOne({ _id: req.params.id, hotelId: req.hotelId })
+      .populate('locationTypeId', 'key name')
+      .lean();
+    if (!location) return res.status(404).json({ success: false, message: 'Storage location not found.' });
+
+    const batchFilter = {
+      hotelId: req.hotelId,
+      $or: [
+        { locationId: location._id },
+        { locationId: null, location: location.locationName }
+      ]
+    };
+    if (mongoose.isValidObjectId(req.propertyId)) batchFilter.propertyId = req.propertyId;
+    const batches = await InventoryBatch.find(batchFilter)
+      .populate('itemId', 'name code baseUnit unit')
+      .lean();
+
+    const itemsById = new Map();
+    for (const batch of batches) {
+      const item = batch.itemId;
+      if (!item?._id) continue;
+      const key = String(item._id);
+      const entry = itemsById.get(key) || {
+        itemId: item._id,
+        itemName: item.name,
+        itemCode: item.code || '',
+        unit: item.baseUnit || item.unit || '',
+        receivedQuantity: 0,
+        currentQuantity: 0,
+        receivedValue: 0,
+        currentValue: 0,
+        purchaseValue: 0,
+        batchCount: 0
+      };
+      const receivedQuantity = Number(batch.quantity) || 0;
+      const currentQuantity = Number(batch.remainingQuantity) || 0;
+      const unitCost = Number(batch.unitCost) || 0;
+      const purchaseAmount = Number(batch.purchaseAmount);
+      entry.receivedQuantity += receivedQuantity;
+      entry.currentQuantity += currentQuantity;
+      entry.receivedValue += receivedQuantity * unitCost;
+      entry.currentValue += currentQuantity * unitCost;
+      entry.purchaseValue += Number.isFinite(purchaseAmount) && purchaseAmount >= 0
+        ? purchaseAmount
+        : receivedQuantity * unitCost;
+      entry.batchCount += 1;
+      itemsById.set(key, entry);
+    }
+
+    const items = [...itemsById.values()]
+      .map((entry) => ({
+        itemId: entry.itemId,
+        itemName: entry.itemName,
+        itemCode: entry.itemCode,
+        unit: entry.unit,
+        receivedQuantity: entry.receivedQuantity,
+        usedQuantity: Math.max(0, entry.receivedQuantity - entry.currentQuantity),
+        currentQuantity: entry.currentQuantity,
+        averageUnitCost: entry.receivedQuantity > 0
+          ? roundMoney(entry.receivedValue / entry.receivedQuantity)
+          : 0,
+        currentValue: roundMoney(entry.currentValue),
+        purchaseValue: roundMoney(entry.purchaseValue),
+        batchCount: entry.batchCount
+      }))
+      .sort((left, right) => left.itemName.localeCompare(right.itemName));
+
+    res.json({
+      success: true,
+      data: {
+        locationId: location._id,
+        locationName: location.locationName,
+        locationType: location.locationTypeId?.name || '',
+        items,
+        currentValue: roundMoney(items.reduce((total, item) => total + item.currentValue, 0))
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
