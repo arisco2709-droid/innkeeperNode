@@ -1619,16 +1619,19 @@ export const getRecipeIngredientBatchDetails = async (req, res, next) => {
     const itemIds = recipe.ingredients
       .map((ingredient) => ingredient.itemId?._id)
       .filter(Boolean);
+    const recipeLocationId = recipe.locationId ? String(recipe.locationId) : '';
+    const recipeLocationName = recipe.location || 'Restaurant Store';
+    const batchMatchesRecipeLocation = (batch) => (
+      (recipeLocationId && String(batch.locationId || '') === recipeLocationId)
+      || batch.location === recipeLocationName
+    );
     const batches = await InventoryBatch.find({
       ...tenantFilter(req),
       itemId: { $in: itemIds },
-      $or: [
-        ...(recipe.locationId ? [{ locationId: recipe.locationId }] : []),
-        { locationId: null, location: recipe.location || 'Restaurant Store' }
-      ]
+      remainingQuantity: { $gt: 0 }
     })
       .populate('vendorId', 'name')
-      .select('itemId location batchNumber quantity remainingQuantity unitCost purchaseQuantity purchaseUnit purchaseUnitCost purchaseAmount receivedAt expiryDate vendorId')
+      .select('itemId location locationId batchNumber quantity remainingQuantity unitCost purchaseQuantity purchaseUnit purchaseUnitCost purchaseAmount receivedAt expiryDate vendorId')
       .sort({ receivedAt: 1, _id: 1 })
       .lean();
     const batchesByItem = new Map();
@@ -1661,6 +1664,8 @@ export const getRecipeIngredientBatchDetails = async (req, res, next) => {
         .filter((batch) => Number(batch.remainingQuantity) > 0
           && (!expiryTracked || !batch.expiryDate || new Date(batch.expiryDate) > now))
         .sort((left, right) => {
+          const locationRank = Number(batchMatchesRecipeLocation(right)) - Number(batchMatchesRecipeLocation(left));
+          if (locationRank) return locationRank;
           if (expiryTracked) {
             const leftExpiry = left.expiryDate ? new Date(left.expiryDate).getTime() : Number.POSITIVE_INFINITY;
             const rightExpiry = right.expiryDate ? new Date(right.expiryDate).getTime() : Number.POSITIVE_INFINITY;

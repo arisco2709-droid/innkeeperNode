@@ -429,7 +429,13 @@ export const createProductionBatch = async ({
       notes: `Raw material consumed for ${recipe.recipeName || menuItem.name} production.`,
       recordedBy,
       idempotencyKey: idempotencyKey ? `production:${idempotencyKey}:${item._id}:consumption` : undefined,
-      metadata: { source: 'food_production', recipeId: String(recipe._id), recipeVersion: recipe.version },
+      metadata: {
+        source: 'food_production',
+        recipeId: String(recipe._id),
+        recipeVersion: recipe.version,
+        menuItemName: menuItem.name,
+        recipeName: recipe.recipeName || ''
+      },
       session
     });
     let wastageMovement = null;

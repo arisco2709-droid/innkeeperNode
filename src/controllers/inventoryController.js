@@ -266,7 +266,7 @@ export const getInventoryBatches = async (req, res, next) => {
       propertyId: req.propertyId,
       itemId: item._id,
       ...(req.query.location ? { location: String(req.query.location).trim() } : {})
-    }).select('movementType batchAllocations orderId metadata quantity location destinationLocation transactionDate createdAt batchNumber').sort({ transactionDate: 1, createdAt: 1, _id: 1 }).lean();
+    }).select('movementType batchAllocations orderId metadata notes quantity location destinationLocation department transactionDate createdAt batchNumber').sort({ transactionDate: 1, createdAt: 1, _id: 1 }).lean();
     const isReceiptCancelled = (movement) => (
       movement?.metadata?.status === 'cancelled'
       || Boolean(movement?.metadata?.reversedByMovementId)
@@ -312,6 +312,19 @@ export const getInventoryBatches = async (req, res, next) => {
       transferredQuantity: 0
     }]));
     const remainingByBatch = new Map(batches.map((batch) => [String(batch._id), Number(batch.quantity) || 0]));
+    const usagesByBatch = new Map(batches.map((batch) => [String(batch._id), []]));
+    const usageLabel = (movement) => {
+      const sources = Array.isArray(movement.metadata?.recipeSources) ? movement.metadata.recipeSources : [];
+      const menuNames = [...new Set(sources.map((source) => String(source.menuItemName || '').trim()).filter(Boolean))];
+      if (menuNames.length) return menuNames.join(', ');
+      if (movement.metadata?.menuItemName) return String(movement.metadata.menuItemName);
+      const producedFor = String(movement.notes || '').match(/^Raw material consumed for (.+) production\.$/);
+      if (producedFor) return producedFor[1];
+      if (movement.movementType === 'wastage') return 'Wastage';
+      if (movement.movementType === 'expiry') return 'Expiry';
+      if (movement.movementType === 'transfer') return 'Transfer';
+      return movement.department || 'Used';
+    };
     const movementById = new Map(movements.map((movement) => [String(movement._id), movement]));
     for (const movement of movements) {
       const allocations = movement.batchAllocations || [];
@@ -334,6 +347,10 @@ export const getInventoryBatches = async (req, res, next) => {
                 Number(batches.find((batch) => String(batch._id) === batchId)?.quantity) || 0,
                 (remainingByBatch.get(batchId) || 0) + quantity
               )
+            );
+            usagesByBatch.set(
+              batchId,
+              (usagesByBatch.get(batchId) || []).filter((usage) => usage.movementId !== String(reversedMovement._id))
             );
           }
         }
@@ -365,6 +382,16 @@ export const getInventoryBatches = async (req, res, next) => {
           stats.transferredQuantity += quantity;
         }
         remainingByBatch.set(batchId, Math.max(0, (remainingByBatch.get(batchId) || 0) - quantity));
+        const usages = usagesByBatch.get(batchId);
+        if (usages) {
+          usages.push({
+            movementId: String(movement._id),
+            menuName: usageLabel(movement),
+            deductedAt: movement.transactionDate || movement.createdAt,
+            quantity,
+            movementType: movement.movementType
+          });
+        }
       };
       const isTransferOut = movement.movementType === 'transfer'
         && movement.metadata?.fromLocation === movement.location
@@ -473,6 +500,7 @@ export const getInventoryBatches = async (req, res, next) => {
           wastageQuantity: stats.wastageQuantity,
           unrecordedQuantity: stats.unrecordedQuantity,
           remainingQuantity: remainingByBatch.get(String(batch._id)) || 0,
+          usages: (usagesByBatch.get(String(batch._id)) || []).map(({ movementId, ...usage }) => usage),
           salesRevenue,
           loss: wastageLoss + unrecordedLoss,
           wastageLoss,
